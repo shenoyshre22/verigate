@@ -24,4 +24,4 @@ class RekognitionLivenessClient:
         return self._client.create_face_liveness_session(**params)
 
     def get_results(self, session_id: str) -> dict[str, Any]:
-        return self._client.get_face_liveness_session_results( livenessSessionId=session_id)
+        return self._client.get_face_liveness_session_results(SessionId=session_id)
