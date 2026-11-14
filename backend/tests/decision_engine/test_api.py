@@ -57,8 +57,15 @@ def test_borderline_match_requests_verification(client):
 
 def test_offline_simulation_never_opens_sensitive_room(client):
     r = post(client, rfid_card_id="CARD-A1", room_id="EXAMHALL", online=False,
-             evidence={"fingerprint_match": True})
+             evidence={})
     assert r.json()["decision"] == "DENY" and r.json()["mode"] == "offline"
+
+
+def test_client_cannot_assert_fingerprint_result(client):
+    for result in (True, False):
+        r = post(client, person_id="P001", evidence={**GOOD, "fingerprint_match": result})
+        assert r.status_code == 422
+        assert "trusted fingerprint evidence adapter" in r.text
 
 
 def test_raw_image_field_rejected(client, tables):

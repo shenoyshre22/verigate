@@ -74,6 +74,15 @@ class EvidenceIn(_NoBiometrics):
     fingerprint_match: Optional[bool] = None
     challenge_passed: Optional[bool] = None
 
+    @model_validator(mode="after")
+    def _reject_untrusted_fingerprint_result(self) -> "EvidenceIn":
+        if self.fingerprint_match is not None:
+            raise ValueError(
+                "client-reported fingerprint results are not accepted; "
+                "a trusted fingerprint evidence adapter is not configured"
+            )
+        return self
+
 
 class EvaluateRequest(_NoBiometrics):
     person_id: Optional[str] = _id()
