@@ -17,10 +17,12 @@ from typing import Any, Callable, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .audit_store import AuditLog
+from .audit_store import SESSION_REPLAYED, AuditLog
+from .face_match import NO_REFERENCE, ServerFaceMatcher
 from .context_loader import ContextLoader, normalize_room, parse_ts
-from .engine import ALLOW, DENY, Decision, Evidence, decide
-from .liveness import SESSION_ID_PATTERN, LivenessVerifier, client_evidence_allowed
+from .engine import ALLOW, DENY, SPOOF, Decision, Evidence, decide
+from .liveness import (SESSION_ID_PATTERN, LivenessUnavailable, LivenessVerifier, client_evidence_allowed,
+                       session_ttl_seconds)
 
 SERVER, CLIENT, ABSENT = "server-verified", "client-reported", "absent"
 
@@ -96,6 +98,19 @@ class EvaluateResponse(BaseModel):
     audited: bool
 
 
+class LivenessSessionRequest(_NoBiometrics):
+    """Optional binding: the session is then accepted only with the same person_id or rfid_card_id."""
+    person_id: Optional[str] = _id()
+    rfid_card_id: Optional[str] = _id()
+
+
+class LivenessSessionResponse(BaseModel):
+    session_id: str
+    expires_at: str
+    ttl_seconds: int
+    bound_to: Optional[str] = None
+
+
 class OfflineDecisionIn(_NoBiometrics):
     attempt_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     room_id: str = Field(min_length=1, max_length=64)
@@ -161,6 +176,16 @@ def get_liveness_verifier() -> LivenessVerifier:
     return _liveness
 
 
+_matcher: Optional[ServerFaceMatcher] = None
+
+
+def get_face_matcher(verifier: LivenessVerifier = Depends(get_liveness_verifier)) -> ServerFaceMatcher:
+    global _matcher
+    if _matcher is None:
+        _matcher = ServerFaceMatcher(rekognition=verifier.client)  # one Rekognition client for both
+    return _matcher
+
+
 def get_clock() -> Callable[[], datetime]:
     return lambda: datetime.now(timezone.utc)
 
@@ -176,6 +201,7 @@ def evaluate(
     loader: ContextLoader = Depends(get_loader),
     audit: AuditLog = Depends(get_audit_log),
     verifier: LivenessVerifier = Depends(get_liveness_verifier),
+    matcher: ServerFaceMatcher = Depends(get_face_matcher),
     clock: Callable[[], datetime] = Depends(get_clock),
 ) -> EvaluateResponse:
     ein = req.evidence
@@ -191,47 +217,70 @@ def evaluate(
     person_id = req.person_id
     notes: list[str] = []
 
-    # Liveness: the server's own Rekognition lookup wins; client numbers only when explicitly allowed.
-    liveness, liveness_src, liveness_status, reused = None, ABSENT, None, False
-    if ein.liveness_session_id:
+    # Liveness: only sessions this backend issued, once each. The server asks Rekognition itself.
+    liveness, liveness_src, liveness_status = None, ABSENT, None
+    reused, rejected, reference = False, None, None
+    session_id = ein.liveness_session_id
+    if session_id:
         try:
-            first_use = audit.claim_liveness_session(ein.liveness_session_id, now)
-        except Exception:  # noqa: BLE001 - cannot rule out replay, so the session is not trusted
-            log.exception("liveness replay check failed for attempt %s", attempt_id)
-            first_use, liveness_status = None, "REPLAY_CHECK_UNAVAILABLE"
-            notes.append("liveness replay check unavailable")
-        if first_use is False:
+            problem = audit.consume_liveness_session(session_id, now, (req.person_id, req.rfid_card_id))
+        except Exception:  # noqa: BLE001 - cannot prove the session is ours and unused, so it is not trusted
+            log.exception("liveness session check failed for attempt %s", attempt_id)
+            problem, liveness_status = "issuance check unavailable", "CHECK_UNAVAILABLE"
+        if problem == SESSION_REPLAYED:
             reused, liveness_status = True, "REUSED"
-        elif first_use:
-            res = verifier.check(ein.liveness_session_id)
+        elif problem:
+            rejected = problem
+            liveness_status = liveness_status or "REJECTED"
+        else:
+            res, reference = verifier.check_with_reference(session_id)
             liveness_status = res.status
             if res.confidence is not None:
                 liveness, liveness_src = res.confidence, SERVER
             if res.note:
                 notes.append(res.note)
+            if res.verdict == SPOOF:
+                reference = None  # a spoofed capture is never compared
         if client_liveness:
             notes.append("client-reported liveness ignored; server lookup used")
     elif client_liveness:
         liveness, liveness_src = ein.liveness, CLIENT
         liveness_status = ein.liveness_status
 
+    # Face identity: with a session, only the server's own comparison counts; client face scores are ignored.
+    face_person_id, face_similarity = ein.face_person_id, ein.face_similarity
+    face_src = CLIENT
+    if session_id:
+        if face_person_id is not None or face_similarity is not None:
+            notes.append("client-reported face match ignored; server comparison used")
+        face_person_id, face_similarity, face_src = None, None, ABSENT
+    face_check: dict = {"status": "NOT_RUN"} if session_id else {}
+
     evidence_used = {
         "liveness": liveness,
         "liveness_status": liveness_status if liveness_src == CLIENT else None,
-        "face_person_id": ein.face_person_id,
-        "face_similarity": ein.face_similarity,
+        "face_person_id": face_person_id,
+        "face_similarity": face_similarity,
         "fingerprint_match": ein.fingerprint_match,
         "challenge_passed": ein.challenge_passed,
     }
-    sources = {k: (CLIENT if v is not None else ABSENT) for k, v in evidence_used.items()}
-    sources["liveness"] = liveness_src
-    sources["liveness_status"] = liveness_src if evidence_used["liveness_status"] else ABSENT
     context_summary: dict = {}
+    reference_missing = False
 
     try:
         loaded = loader.load(room_id=room, person_id=req.person_id, rfid_card_id=req.rfid_card_id,
                              online=req.online, now=now)
         person_id = loaded.person_id or req.person_id
+        if reference is not None and loaded.person_id:
+            fc = matcher.match(loaded.person_id, reference)  # bytes live only for this call
+            face_check = {"status": fc.status, "similarity": fc.similarity}
+            if fc.compared:
+                evidence_used["face_person_id"], evidence_used["face_similarity"] = loaded.person_id, fc.similarity
+                face_src = SERVER
+            reference_missing = fc.status == NO_REFERENCE
+            if fc.note:
+                notes.append(fc.note)
+        reference = None
         c, rec = loaded.context, loaded.reconciliation
         context_summary = {
             "status": c.person.get("status") if c.person else None,
@@ -242,12 +291,21 @@ def evaluate(
             "revoked": c.revoked, "revocation_fresh": c.revocation_fresh, "card_issuer": loaded.card_issuer,
             "records_fresh": c.records_fresh, "room_sensitive": c.room_sensitive,
         }
-        sources["rfid_person_id"] = SERVER if req.rfid_card_id else ABSENT  # resolved from campus records
-        ev = Evidence(**evidence_used, rfid_person_id=loaded.card_person_id, liveness_session_reused=reused)
+        ev = Evidence(**evidence_used, rfid_person_id=loaded.card_person_id, liveness_session_reused=reused,
+                      liveness_session_rejected=rejected, face_reference_missing=reference_missing)
         result = decide(ev, loaded.context)
     except Exception:  # noqa: BLE001 - any failure to read records must fail closed
         log.exception("campus records unavailable for attempt %s", attempt_id)
         result = Decision(DENY, ["campus records unavailable; failing closed"], mode_if_error)
+    finally:
+        reference = None
+
+    sources = {k: (CLIENT if v is not None else ABSENT) for k, v in evidence_used.items()}
+    sources["liveness"] = liveness_src
+    sources["liveness_status"] = liveness_src if evidence_used["liveness_status"] else ABSENT
+    for k in ("face_person_id", "face_similarity"):
+        sources[k] = face_src if evidence_used[k] is not None else ABSENT
+    sources["rfid_person_id"] = SERVER if req.rfid_card_id else ABSENT  # resolved from campus records
     if notes:
         result = Decision(result.decision, list(result.reasons) + notes, result.mode)
     decision_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -265,6 +323,7 @@ def evaluate(
         "evidence_source": sources,  # per field: server-verified / client-reported / absent
         "liveness_session_id": ein.liveness_session_id,
         "liveness_status": liveness_status,
+        "face_check": face_check,  # status + similarity only; image bytes are never stored
         "context": context_summary,  # the campus-record facts the decision rested on
         "decided_at": _iso(now),
     }
@@ -280,6 +339,31 @@ def evaluate(
 
     return EvaluateResponse(attempt_id=attempt_id, decision=result.decision, reasons=list(result.reasons),
                             mode=result.mode, decision_ms=decision_ms, audited=audited)
+
+
+@router.post("/liveness-session", response_model=LivenessSessionResponse, status_code=201)
+def create_liveness_session(
+    req: LivenessSessionRequest,
+    audit: AuditLog = Depends(get_audit_log),
+    verifier: LivenessVerifier = Depends(get_liveness_verifier),
+    clock: Callable[[], datetime] = Depends(get_clock),
+) -> LivenessSessionResponse:
+    """Kiosk asks for a Face Liveness session. The id is recorded as issued, single-use, for 10 minutes;
+    /decision/evaluate accepts only ids issued here. If the issuance cannot be recorded, no id is returned."""
+    now = clock()
+    try:
+        session_id = verifier.create_session()
+    except LivenessUnavailable as e:
+        log.warning("liveness session creation failed: %s", e)
+        raise HTTPException(status_code=502, detail="liveness provider unavailable") from e
+    ttl = session_ttl_seconds()
+    try:
+        item = audit.issue_liveness_session(session_id, now, ttl, bound_to=req.person_id or req.rfid_card_id)
+    except Exception as e:  # noqa: BLE001 - an unrecorded session would be rejected later anyway
+        log.exception("could not record issued liveness session")
+        raise HTTPException(status_code=503, detail="session store unavailable") from e
+    return LivenessSessionResponse(session_id=session_id, expires_at=item["valid_until"], ttl_seconds=ttl,
+                                   bound_to=item["bound_to"])
 
 
 @router.post("/offline-sync", response_model=OfflineSyncResponse)
@@ -357,4 +441,4 @@ def _review_offline(item: OfflineDecisionIn, loader: ContextLoader) -> Optional[
     return None
 
 
-__all__ = ["router", "get_loader", "get_audit_log", "get_liveness_verifier", "get_clock"]
+__all__ = ["router", "get_loader", "get_audit_log", "get_liveness_verifier", "get_face_matcher", "get_clock"]

@@ -6,6 +6,8 @@ conditions, begins_with and conditional writes behave like DynamoDB for these ac
 from __future__ import annotations
 
 import copy
+import io
+import uuid
 from decimal import Decimal
 
 from botocore.exceptions import ClientError
@@ -89,11 +91,34 @@ class BrokenTable:
 
 
 class FakeRekognition:
-    """Stands in for boto3's rekognition client: get_face_liveness_session_results only."""
+    """Stands in for boto3's rekognition client: Face Liveness create/get and CompareFaces."""
 
-    def __init__(self, sessions: dict | None = None):
+    def __init__(self, sessions: dict | None = None, similarities: dict | None = None):
         self.sessions = sessions or {}  # session_id -> response dict or Exception
+        self.similarities = similarities or {}  # (live bytes, enrolled bytes) -> similarity or Exception
         self.calls: list[str] = []
+        self.compare_calls: list[tuple] = []
+        self.create_error: Exception | None = None
+        self.created: list[str] = []
+
+    def create_face_liveness_session(self, Settings=None, **kw):  # noqa: N803
+        assert Settings == {"AuditImagesLimit": 0}  # we never ask Rekognition to keep audit images
+        if self.create_error:
+            raise self.create_error
+        sid = str(uuid.uuid4())
+        self.created.append(sid)
+        self.sessions[sid] = {"SessionId": sid, "Status": "CREATED"}
+        return {"SessionId": sid}
+
+    def compare_faces(self, SourceImage, TargetImage, SimilarityThreshold=None):  # noqa: N803
+        pair = (SourceImage["Bytes"], TargetImage["Bytes"])
+        self.compare_calls.append(pair)
+        sim = self.similarities.get(pair)
+        if isinstance(sim, Exception):
+            raise sim
+        if sim is None:
+            return {"FaceMatches": [], "UnmatchedFaces": [{"Confidence": 99.9}]}
+        return {"FaceMatches": [{"Similarity": sim, "Face": {"Confidence": 99.9}}], "UnmatchedFaces": []}
 
     def get_face_liveness_session_results(self, SessionId):  # noqa: N803
         self.calls.append(SessionId)
@@ -104,6 +129,23 @@ class FakeRekognition:
         if isinstance(r, Exception):
             raise r
         return copy.deepcopy(r)
+
+
+class FakeS3:
+    """get_object only. Like the Lambda role (GetObject, no ListBucket), a missing key gives AccessDenied."""
+
+    def __init__(self, objects: dict | None = None):
+        self.objects = objects or {}  # (bucket, key) -> bytes or Exception
+        self.calls: list[tuple] = []
+
+    def get_object(self, Bucket, Key):  # noqa: N803
+        self.calls.append((Bucket, Key))
+        obj = self.objects.get((Bucket, Key))
+        if isinstance(obj, Exception):
+            raise obj
+        if obj is None:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}, "GetObject")
+        return {"Body": io.BytesIO(obj)}
 
 
 def campus_tables():

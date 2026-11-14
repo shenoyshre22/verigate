@@ -7,9 +7,10 @@ from fastapi.testclient import TestClient
 from backend.modules.decision_engine import api
 from backend.modules.decision_engine.audit_store import MARKER_PARTITIONS, AuditLog
 from backend.modules.decision_engine.context_loader import ContextLoader
+from backend.modules.decision_engine.face_match import ServerFaceMatcher
 from backend.modules.decision_engine.liveness import LivenessVerifier
 
-from .fakes import FakeRekognition, campus_tables
+from .fakes import FakeRekognition, FakeS3, campus_tables
 
 NOW = datetime(2026, 11, 14, 10, 0, tzinfo=timezone.utc)
 
@@ -68,19 +69,30 @@ def rekognition():
     return FakeRekognition()
 
 
-def make_client(loader, audit_log, rekognition=None):
+FACE_BUCKET = "test-face-refs"
+
+
+@pytest.fixture
+def s3():
+    return FakeS3()
+
+
+def make_client(loader, audit_log, rekognition=None, s3=None):
+    rekognition = rekognition or FakeRekognition()
+    matcher = ServerFaceMatcher(rekognition=rekognition, s3=s3 or FakeS3(), bucket=FACE_BUCKET)
     app = FastAPI()
     app.include_router(api.router)
     app.dependency_overrides[api.get_loader] = lambda: loader
     app.dependency_overrides[api.get_audit_log] = lambda: audit_log
-    app.dependency_overrides[api.get_liveness_verifier] = lambda: LivenessVerifier(rekognition or FakeRekognition())
+    app.dependency_overrides[api.get_liveness_verifier] = lambda: LivenessVerifier(rekognition)
+    app.dependency_overrides[api.get_face_matcher] = lambda: matcher
     app.dependency_overrides[api.get_clock] = lambda: (lambda: NOW)
     return TestClient(app)
 
 
 @pytest.fixture
-def client(loader, audit_log, rekognition):
-    return make_client(loader, audit_log, rekognition)
+def client(loader, audit_log, rekognition, s3):
+    return make_client(loader, audit_log, rekognition, s3)
 
 
 def audit_records(tables):

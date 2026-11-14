@@ -61,6 +61,8 @@ class Evidence:
     challenge_passed: Optional[bool] = None   # result of a randomized face challenge, None if not done
     liveness_session_reused: bool = False     # the liveness session id was already used (replay)
     liveness_status: Optional[str] = None     # SPOOF / LIVE / UNCERTAIN reported by a liveness/PAD check
+    liveness_session_rejected: Optional[str] = None  # why a presented session id was refused (not issued, expired ...)
+    face_reference_missing: bool = False      # server face check impossible: no enrolled reference photo
 
 
 @dataclass
@@ -111,6 +113,8 @@ def decide(ev: Evidence, ctx: Context, t: dict = THRESHOLDS) -> Decision:
     # 1. Liveness failure or a replayed liveness session cannot be overridden by any other module.
     if ev.liveness_session_reused:
         return Decision(DENY, ["liveness session was already used (replay suspected)"])
+    if ev.liveness_session_rejected:
+        return Decision(DENY, [f"liveness session rejected: {ev.liveness_session_rejected}"])
     verdict = combined_verdict(ev.liveness, ev.liveness_status, t)
     if verdict == SPOOF:
         detail = f"liveness {ev.liveness:.0f}%" if liveness_verdict(ev.liveness, t) == SPOOF else "liveness status SPOOF"
@@ -171,6 +175,8 @@ def decide(ev: Evidence, ctx: Context, t: dict = THRESHOLDS) -> Decision:
 
     # 7. Face identity.
     if ev.face_person_id is None or ev.face_similarity is None:
+        if ev.face_reference_missing:
+            return Decision(REQUEST_VERIFICATION, ["no enrolled reference photo; manual identity check required"])
         return Decision(REQUEST_VERIFICATION, ["no confident face match; please recapture"])
     if ev.face_similarity < t["match_reject_below"]:
         return Decision(DENY, [f"face does not match ({ev.face_similarity:.0f}%)"])

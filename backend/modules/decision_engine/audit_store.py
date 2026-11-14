@@ -8,9 +8,9 @@ so offline decisions synced later (with older timestamps) still verify in chain 
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
@@ -25,6 +25,13 @@ MAX_RETRIES = 5
 
 class AuditUnavailable(RuntimeError):
     """The audit record could not be written."""
+
+
+SESSION_REPLAYED = "already used (replay suspected)"
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def canonical_number(value: Any) -> Decimal:
@@ -112,10 +119,46 @@ class AuditLog:
                 return False
             raise AuditUnavailable(str(e)) from e
 
-    # One-time-use markers for liveness sessions: day="LIVENESS-SESSION", ts_attempt=<session_id>.
-    def claim_liveness_session(self, session_id: str, now: datetime) -> bool:
-        """True the first time a session id is presented; False on any reuse (replay)."""
-        return self._claim("LIVENESS-SESSION", session_id, now, Attr("ts_attempt").not_exists())
+    # Liveness sessions: day="LIVENESS-SESSION", ts_attempt=<session_id>, status issued -> consumed.
+    def issue_liveness_session(self, session_id: str, now: datetime, ttl_seconds: int,
+                               bound_to: Optional[str] = None) -> dict:
+        """Record a session this backend created. Only issued, unexpired, unconsumed ids are ever accepted."""
+        valid_until = now + timedelta(seconds=ttl_seconds)
+        item = {"day": "LIVENESS-SESSION", "ts_attempt": session_id, "status": "issued",
+                "issued_at": _iso(now), "valid_until": _iso(valid_until), "bound_to": bound_to,
+                "expires_at": int(valid_until.timestamp())}  # DynamoDB TTL cleans up; code also checks valid_until
+        try:
+            self.table.put_item(Item=ddb_safe(item), ConditionExpression=Attr("ts_attempt").not_exists())
+        except ClientError as e:
+            raise AuditUnavailable(str(e)) from e
+        return item
+
+    def consume_liveness_session(self, session_id: str, now: datetime,
+                                 identifiers: tuple = ()) -> Optional[str]:
+        """Mark an issued session consumed. Returns None if accepted, else why it was refused
+        (SESSION_REPLAYED for reuse, or a short reason)."""
+        try:
+            item = self.table.get_item(Key={"day": "LIVENESS-SESSION", "ts_attempt": session_id},
+                                       ConsistentRead=True).get("Item")
+            if item is None:
+                return "not issued by this backend"
+            if item.get("status") != "issued":
+                return SESSION_REPLAYED  # consumed (or a pre-issuance first-use marker)
+            valid_until = item.get("valid_until")
+            if not valid_until or str(valid_until) <= _iso(now):
+                return "expired"
+            bound = item.get("bound_to")
+            if bound and bound not in identifiers:
+                return "issued for a different person"
+            self.table.put_item(
+                Item=ddb_safe({**item, "status": "consumed", "consumed_at": _iso(now)}),
+                ConditionExpression=Attr("status").eq("issued"),
+            )
+            return None
+        except ClientError as e:
+            if _is_conditional_failure(e):
+                return SESSION_REPLAYED  # consumed concurrently by another request
+            raise AuditUnavailable(str(e)) from e
 
     # Dedup markers for offline sync: day="OFFLINE-SYNC", ts_attempt=<attempt_id>.
     def claim_offline(self, attempt_id: str, now: datetime) -> bool:
