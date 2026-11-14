@@ -27,12 +27,21 @@ class AuditUnavailable(RuntimeError):
     """The audit record could not be written."""
 
 
+def canonical_number(value: Any) -> Decimal:
+    """The form DynamoDB returns a number in: no trailing zeros, no exponent (97.0 -> 97, 1.50 -> 1.5).
+    Hashing this form means a record read back from DynamoDB hashes exactly as it did when written."""
+    d = value if isinstance(value, Decimal) else Decimal(str(value))
+    if d == d.to_integral_value():
+        return Decimal(int(d))
+    return Decimal(format(d.normalize(), "f"))
+
+
 def ddb_safe(value: Any) -> Any:
-    """Convert numbers to Decimal so the hashed form equals what DynamoDB returns."""
-    if isinstance(value, bool) or value is None or isinstance(value, (str, Decimal)):
+    """DynamoDB-storable copy with numbers in canonical form (see canonical_number)."""
+    if isinstance(value, bool) or value is None or isinstance(value, str):
         return value
-    if isinstance(value, (int, float)):
-        return Decimal(str(value))
+    if isinstance(value, (int, float, Decimal)):
+        return canonical_number(value)
     if isinstance(value, dict):
         return {k: ddb_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -121,10 +130,15 @@ class AuditLog:
         }))
 
 
-def verify_items(items: Iterable[dict]) -> bool:
-    """Verify audit records read back from DynamoDB, in chain (seq) order."""
-    records = sorted((i for i in items if "seq" in i and i.get("day") not in MARKER_PARTITIONS),
+def verify_items(items: Iterable[dict], from_seq: int = 1) -> bool:
+    """Verify audit records read back from DynamoDB in chain (seq) order, starting at from_seq.
+    Also fails on a gap in seq, i.e. a record deleted from the middle of the checked range."""
+    records = sorted((ddb_safe(i) for i in items
+                      if "seq" in i and i.get("day") not in MARKER_PARTITIONS and int(i["seq"]) >= from_seq),
                      key=lambda i: int(i["seq"]))
     if not records:
         return True
+    seqs = [int(r["seq"]) for r in records]
+    if seqs != list(range(seqs[0], seqs[0] + len(seqs))):
+        return False
     return verify(records, prev_hash=records[0]["prev_hash"])

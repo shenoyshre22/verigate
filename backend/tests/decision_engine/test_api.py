@@ -118,3 +118,22 @@ def test_concurrent_head_update_retries(client, tables):
     audit.put_item = racing_put
     assert post(client, person_id="P001").json()["audited"]
     assert state["raced"] and verify_items(audit_records(tables))
+
+
+def test_numbers_hash_in_the_form_dynamodb_returns():
+    from decimal import Decimal
+
+    from backend.modules.decision_engine.audit_store import canonical_number
+
+    assert canonical_number(97.0) == Decimal("97") and str(canonical_number(97.0)) == "97"
+    assert str(canonical_number(Decimal("1.50"))) == "1.5"
+    assert str(canonical_number(100)) == "100" and str(canonical_number(430.66)) == "430.66"
+    assert str(canonical_number(Decimal("1E+2"))) == "100"
+
+
+def test_seq_gap_fails_verification(client, tables):
+    for _ in range(3):
+        post(client, person_id="P001")
+    recs = sorted(audit_records(tables), key=lambda i: int(i["seq"]))
+    assert verify_items(recs) and verify_items(recs, from_seq=2)
+    assert not verify_items([recs[0], recs[2]])

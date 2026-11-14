@@ -6,6 +6,7 @@ conditions, begins_with and conditional writes behave like DynamoDB for these ac
 from __future__ import annotations
 
 import copy
+from decimal import Decimal
 
 from botocore.exceptions import ClientError
 
@@ -27,6 +28,17 @@ def _eval(cond, item: dict) -> bool:
     if op == "attribute_exists":
         return name in item
     raise NotImplementedError(op)
+
+
+def _as_dynamodb_returns(value):
+    """DynamoDB does not keep a number's formatting: Decimal('97.0') comes back as Decimal('97')."""
+    if isinstance(value, Decimal):
+        return Decimal(int(value)) if value == value.to_integral_value() else Decimal(format(value.normalize(), "f"))
+    if isinstance(value, dict):
+        return {k: _as_dynamodb_returns(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_as_dynamodb_returns(v) for v in value]
+    return value
 
 
 def _conditional_failure(op: str) -> ClientError:
@@ -53,7 +65,7 @@ class FakeTable:
         existing = self.items.get(self._key(Item), {})
         if ConditionExpression is not None and not _eval(ConditionExpression, existing):
             raise _conditional_failure("PutItem")
-        self.items[self._key(Item)] = copy.deepcopy(Item)
+        self.items[self._key(Item)] = _as_dynamodb_returns(copy.deepcopy(Item))
         return {}
 
     def query(self, KeyConditionExpression, IndexName=None, ScanIndexForward=True, Limit=None):  # noqa: N803
