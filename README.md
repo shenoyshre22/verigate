@@ -181,16 +181,20 @@ Performance values will be reported based on actual prototype testing rather tha
 verigate/
 │
 ├── backend/
+│   ├── __init__.py
 │   ├── app/
+│   │   ├── __init__.py
+│   │   └── main.py
 │   ├── modules/
+│   │   ├── __init__.py
 │   │   ├── face_authentication/
 │   │   ├── randomized_challenge/
 │   │   ├── fingerprint/
 │   │   └── rfid/
 │   ├── tests/
+│   │   └── face_authentication/
+│   ├── .env.example
 │   └── requirements.txt
-│
-├── frontend/
 │
 ├── aws/
 │   ├── lambda/
@@ -207,6 +211,14 @@ verigate/
 ├── .gitignore
 └── README.md
 ```
+
+### Current implementation status
+
+Phase 2A establishes the backend repository structure and a minimal FastAPI
+health endpoint. Face authentication is the only module in scope for the next
+implementation phase; its liveness and identity stages are not implemented
+yet. Randomized challenges, fingerprint, RFID, and the Zero Trust Decision
+Engine remain planned boundaries only.
 
 ## Team VERIGATE
 

@@ -1,0 +1,1 @@
+"""RFID verification module boundary."""
