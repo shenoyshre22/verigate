@@ -41,6 +41,15 @@ def test_handler_serves_decision_routes_exactly_once(handler_module):
     assert count(app, "/decision/evaluate") == 1
     assert count(app, "/decision/offline-sync") == 1
     assert count(app, "/health") == 1
+    assert count(app, "/api/v1/face-auth/liveness/session") == 1
+
+
+def test_mounted_liveness_route_fails_closed_without_integration(handler_module):
+    from fastapi.testclient import TestClient
+
+    r = TestClient(handler_module.app).post("/api/v1/face-auth/liveness/session",
+                                            json={"authentication_attempt_id": "A1"})
+    assert r.status_code == 503  # no auth principal / ownership store wired: never a session
 
 
 def test_reimporting_handler_does_not_duplicate(handler_module):
@@ -54,7 +63,8 @@ def test_skips_router_main_already_includes_with_prefix(handler_module):
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")  # what Shreya may do in main.py
-    assert handler_module.include_missing_routers(app) == []
+    decision_only = [r for r in handler_module.EXTRA_ROUTERS if r[0].endswith("decision_engine.api")]
+    assert handler_module.include_missing_routers(app, decision_only) == []
     assert count(app, "/decision/evaluate") == 0 and count(app, "/api/v1/decision/evaluate") == 1
 
 

@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 EXTRA_ROUTERS = [
     ("backend.modules.decision_engine.api", "/decision/evaluate"),
     ("backend.modules.reporting.api", "/reports/explain"),
+    # Shreya's liveness router. By its own design it answers 503 until the host app overrides
+    # get_authenticated_user_id and get_ownership_store, so mounting it never opens anything.
+    ("backend.modules.face_authentication.liveness.routes", "/face-auth/liveness/session"),
 ]
 
 

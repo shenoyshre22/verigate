@@ -6,10 +6,6 @@ Parameters:
   Stage:
     Type: String
     Default: dev
-  CollectionId:
-    Type: String
-    Default: verigate-faces
-    Description: Rekognition face collection holding enrolled face vectors (no raw images in DynamoDB).
   BedrockModelId:
     Type: String
     Default: ""
@@ -140,20 +136,31 @@ Resources:
           AUTHORIZATION_TABLE: !Ref AuthorizationTable
           REVOCATIONS_TABLE: !Ref RevocationsTable
           AUDIT_TABLE: !Ref AuditTable
-          COLLECTION_ID: !Ref CollectionId
           BEDROCK_MODEL_ID: !Ref BedrockModelId
           FACE_REFERENCE_BUCKET: !Ref FaceRefsBucket
           ALLOW_CLIENT_EVIDENCE: !Ref AllowClientEvidence
+      # Least privilege: exactly the calls the code makes (see aws/VALIDATION.md "Local integration").
       Policies:
-        - DynamoDBReadPolicy: { TableName: !Ref IdentitiesTable }
-        - DynamoDBReadPolicy: { TableName: !Ref AuthorizationTable }
-        - DynamoDBCrudPolicy: { TableName: !Ref RevocationsTable }
         - Statement:
-            - Sid: AuditAppendOnly
+            - Sid: IdentitiesLookup          # get_item by person_id, query on GSI by-card
               Effect: Allow
-              Action: [dynamodb:PutItem, dynamodb:Query, dynamodb:GetItem]
+              Action: [dynamodb:GetItem, dynamodb:Query]
+              Resource:
+                - !GetAtt IdentitiesTable.Arn
+                - !Sub ${IdentitiesTable.Arn}/index/by-card
+            - Sid: GrantsQuery               # query grants by person_id + grant_key prefix
+              Effect: Allow
+              Action: [dynamodb:Query]
+              Resource: !GetAtt AuthorizationTable.Arn
+            - Sid: RevocationsLookup         # get_item for revocations and SYNC#<issuer> feed status
+              Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt RevocationsTable.Arn
+            - Sid: AuditAppendOnly           # conditional put of records/markers, get HEAD; no delete/update/scan
+              Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:GetItem]
               Resource: !GetAtt AuditTable.Arn
-            - Sid: FaceLivenessSessions
+            - Sid: FaceLivenessAndCompare    # these Rekognition actions do not support resource-level permissions
               Effect: Allow
               Action:
                 - rekognition:CreateFaceLivenessSession
@@ -165,10 +172,6 @@ Resources:
               Effect: Allow
               Action: [s3:GetObject]
               Resource: !Sub ${FaceRefsBucket.Arn}/*
-            - Sid: FaceCollectionSearch
-              Effect: Allow
-              Action: [rekognition:SearchFacesByImage]
-              Resource: !Sub arn:aws:rekognition:${AWS::Region}:${AWS::AccountId}:collection/${CollectionId}
             - Sid: BedrockReportsOnly
               Effect: Allow
               Action: [bedrock:InvokeModel]

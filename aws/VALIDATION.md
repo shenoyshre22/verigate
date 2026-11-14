@@ -150,6 +150,68 @@ The audit records carry the facts behind each decision. For example, J5's `conte
 Demo note: the campus feed status `SYNC#campus` is fresh for 60 min after seeding. After that, every campus card gets
 REQUEST_VERIFICATION, which is correct behaviour. Before a demo, run `seed.py --stage dev --refresh-sync`.
 
+## Local integration (real AWS)
+
+2026-11-14 ~08:15 UTC. The app object the Lambda serves (`aws/lambda/handler.py` -> `app`) ran locally with uvicorn on
+127.0.0.1:8765, against the real `verigate-dev` tables, Rekognition and the face-refs bucket. Environment:
+`AWS_PROFILE=hid`, `AWS_REGION=us-east-1`, `FACE_REFERENCE_BUCKET=verigate-dev-face-refs-<account-id>`,
+`ALLOW_CLIENT_EVIDENCE=false`, `FACE_REFERENCE_DIR` unset.
+
+`uvicorn backend.app.main:app` alone would not serve these routes: main.py includes only the face-recognition
+router. The handler's guarded include adds the decision router and, since this change, Shreya's liveness router.
+
+Shreya's liveness router requires the host app to provide an authenticated user and an ownership store. Unwired, it
+answers 503 (covered by `test_mounted_liveness_route_fails_closed_without_integration`). For this local test only, a
+harness outside the repo supplied a fixed test user `S1` and an in-memory ownership store that knows one attempt id.
+**The deployed route still returns 503 until the team wires real auth and a durable ownership store.**
+
+| # | Call | Result |
+|---|------|--------|
+| 1 | `POST /api/v1/face-auth/liveness/session` `{"authentication_attempt_id":"LOCAL-ATTEMPT-1"}` | **201**, real Rekognition session `a9c4b75c-3510-415d-98d6-b67f5e0268b6`, status `PENDING` (1.6 s) |
+| 1b | same route, attempt id not owned by the user | **404** `Liveness session or authentication attempt was not found.` |
+| 2 | `POST /decision/evaluate` `{"person_id":"S1","room_id":"LAB3","evidence":{"liveness_session_id":"a9c4b75c-...","face_person_id":"S1","face_similarity":99.0}}`, with no liveness check done in the session | **REQUEST_VERIFICATION**, not ALLOW. Reasons: `liveness not checked`, `additional verification required`, `liveness session CREATED`. The server asked Rekognition itself. decision_ms 6619.71 (laptop to AWS, first call: credential resolution plus Rekognition and DynamoDB) |
+| 2b | same request again (replayed session id) | **DENY** `liveness session was already used (replay suspected)`, without calling Rekognition again |
+| 2c | `evidence.liveness: 99` sent by the client, `ALLOW_CLIENT_EVIDENCE=false` | **422** `client-reported liveness is not accepted; send evidence.liveness_session_id instead` |
+| 2d | `GET /api/v1/face-auth/liveness/session/{id}/result` (Shreya's route) | **502** `Liveness provider failed.` |
+| 3 | `POST /api/v1/face-auth/recognize` (`user_id=S1`, a 1x1 PNG with no face) | **503** `Face reference provider is not configured.` |
+
+Findings:
+
+- **2d is a bug in `rekognition_liveness_client.py:27`.** It calls `get_face_liveness_session_results(livenessSessionId=...)`, and boto3
+  rejects that locally (`ParamValidationError`). The same call with `SessionId=` returned `{"Status":"CREATED"}` for this session.
+  One-line fix for Shreya: `return self._client.get_face_liveness_session_results(SessionId=session_id)`.
+- **3 is not tested yet.** The recognize route still reads only `FACE_REFERENCE_DIR`, so `FACE_REFERENCE_BUCKET` is ignored and the
+  S3 path cannot be exercised. No reference photo was uploaded, because doing so would test nothing yet. This needs Shreya's
+  `S3ReferenceImageProvider` and a consented reference photo.
+- The two audit records from calls 2 and 2b went to the real audit chain with `evidence_source.liveness` = `absent` and
+  `liveness_status` = `CREATED` / `REUSED`.
+
+### Lambda role permissions (IAM policy simulator, read-only)
+
+Every AWS call in `backend/modules` was listed (grep): `get_item`, `put_item`, `query` (DynamoDB),
+`create_face_liveness_session`, `get_face_liveness_session_results`, `detect_faces`, `compare_faces` (Rekognition),
+`converse` (Bedrock, i.e. `bedrock:InvokeModel`), and S3 `get_object` once Shreya's provider lands.
+Each was simulated against the **deployed** role and against the **tightened template policy** (not deployed yet).
+
+| Action / resource | Deployed role | Tightened template |
+|-------------------|---------------|--------------------|
+| GetItem identities; Query identities/index/by-card; Query authorization; GetItem revocations; PutItem + GetItem audit | allowed | allowed |
+| CreateFaceLivenessSession, GetFaceLivenessSessionResults, CompareFaces, DetectFaces | allowed | allowed |
+| s3:GetObject face-refs/`<person_id>`.jpg | allowed | allowed |
+| DeleteItem / UpdateItem / Scan on audit | denied | denied |
+| **PutItem / DeleteItem on revocations** | **allowed (over-broad)** | denied |
+| **Scan on identities** | **allowed (over-broad)** | denied |
+| Query on audit | allowed | denied (code never queries it) |
+| s3:PutObject, s3:ListBucket on face-refs | denied | denied |
+| SearchFacesByImage, IndexFaces | denied | denied |
+
+Tightened template result: 0 mismatches out of 22 checks. Changes in `aws/template.yaml`:
+- SAM `DynamoDBReadPolicy` / `DynamoDBCrudPolicy` are replaced by per-table statements with only the actions above.
+- The unused `SearchFacesByImage` statement, the `CollectionId` parameter and the `COLLECTION_ID` env var are removed.
+
+Rekognition liveness, CompareFaces and DetectFaces do not support resource-level permissions, so they stay on `"*"`.
+Without `s3:ListBucket`, a missing reference returns AccessDenied rather than NoSuchKey, which the provider must treat as "not found".
+
 ## Lambda runtime evidence
 
 | Check | Result |
