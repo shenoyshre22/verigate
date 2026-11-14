@@ -1,122 +1,298 @@
+
 import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+
+import Sidebar from './components/Sidebar'
+import Header from './components/Header'
+import VerificationPanel from './components/VerificationPanel'
+import ContextPanel from './components/ContextPanel'
+import AuthFactors from './components/AuthFactors'
+import OfflinePanel from './components/OfflinePanel'
+import AccessLogs from './components/AccessLogs'
+import SystemStatus from './components/SystemStatus'
 import './App.css'
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [activeSection, setActiveSection] = useState('Overview')
+
+  function renderSection() {
+    switch (activeSection) {
+      case 'Face Verification':
+        return (
+          <>
+            <div className="welcome-banner">
+              <div>
+                <span className="eyebrow">IDENTITY SECURITY</span>
+                <h2>Face Verification</h2>
+                <p>
+                  Capture a face for verification. Live liveness and identity
+                  checks will be connected to the backend.
+                </p>
+              </div>
+            </div>
+            <div className="dashboard-grid">
+              <VerificationPanel />
+            </div>
+          </>
+        )
+
+      case 'Access Control':
+        return (
+          <>
+            <div className="welcome-banner">
+              <div>
+                <span className="eyebrow">CAMPUS ACCESS POLICIES</span>
+                <h2>Access Control</h2>
+                <p>
+                  Review location, schedule and offline access settings.
+                </p>
+              </div>
+            </div>
+            <div className="dashboard-grid">
+              <ContextPanel />
+              <OfflinePanel />
+            </div>
+          </>
+        )
+
+      case 'Authentication Factors':
+        return (
+          <>
+            <div className="welcome-banner">
+              <div>
+                <span className="eyebrow">MULTI-FACTOR SECURITY</span>
+                <h2>Authentication Factors</h2>
+                <p>
+                  Manage the available additional verification factors.
+                </p>
+              </div>
+            </div>
+            <div className="dashboard-grid">
+              <AuthFactors />
+            </div>
+          </>
+        )
+
+      case 'Access Logs':
+        return (
+          <>
+            <div className="welcome-banner">
+              <div>
+                <span className="eyebrow">SECURITY AUDIT</span>
+                <h2>Access Logs</h2>
+                <p>
+                  Review recorded campus access decisions.
+                </p>
+              </div>
+            </div>
+            <AccessLogs />
+          </>
+        )
+
+      case 'Settings':
+        return (
+          <>
+            <div className="welcome-banner">
+              <div>
+                <span className="eyebrow">SYSTEM CONFIGURATION</span>
+                <h2>Settings</h2>
+                <p>
+                  VeriGate system information and configuration status.
+                </p>
+              </div>
+            </div>
+
+            <div className="dashboard-grid">
+              <section className="panel">
+                <h3>System Information</h3>
+                <p>Application: VeriGate</p>
+                <p>Version: 1.0.0</p>
+                <p>AWS Region: us-east-1</p>
+                <p>Environment: Frontend demo</p>
+              </section>
+
+              <section className="panel">
+                <h3>Security Principles</h3>
+                <p>Failed liveness must never be overridden.</p>
+                <p>Access decisions must be fail-safe.</p>
+                <p>Backend policy determines final authorization.</p>
+              </section>
+            </div>
+          </>
+        )
+
+      default:
+        return (
+          <>
+            <div className="welcome-banner">
+              <div>
+                <span className="eyebrow">CAMPUS SECURITY INTELLIGENCE</span>
+                <h2>Welcome to VeriGate <span>✦</span></h2>
+                <p>
+                  Intelligent identity verification and secure campus access,
+                  all in one place.
+                </p>
+              </div>
+
+              <div className="welcome-decoration">
+                <div className="orbit orbit-one" />
+                <div className="orbit orbit-two" />
+                <div className="shield-symbol">⬡</div>
+              </div>
+            </div>
+
+            <div className="overview-grid">
+              <div className="stat-card">
+                <span className="stat-icon blue">◎</span>
+                <span className="stat-label">SYSTEM STATUS</span>
+                <strong><SystemStatus online={true} /></strong>
+                <span className="stat-caption">Demo connectivity state</span>
+              </div>
+
+              <div className="stat-card">
+                <span className="stat-icon green">✓</span>
+                <span className="stat-label">AUTHENTICATION</span>
+                <strong>Multi-factor</strong>
+                <span className="stat-caption">Modular security enabled</span>
+              </div>
+
+              <div className="stat-card">
+                <span className="stat-icon purple">⌁</span>
+                <span className="stat-label">ACCESS POLICY</span>
+                <strong>Context-aware</strong>
+                <span className="stat-caption">Schedule + location checks</span>
+              </div>
+
+              <div className="stat-card">
+                <span className="stat-icon orange">◷</span>
+                <span className="stat-label">SECURITY MODE</span>
+                <strong>Fail-safe</strong>
+                <span className="stat-caption">Never fail open</span>
+              </div>
+            </div>
+
+            <div className="dashboard-grid">
+              <VerificationPanel />
+              <ContextPanel />
+              <AuthFactors />
+              <OfflinePanel />
+            </div>
+
+            <AccessLogs />
+          </>
+        )
+    }
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="app-shell">
+      <Sidebar
+        activeSection={activeSection}
+        onNavigate={setActiveSection}
+      />
 
-      <div className="ticks"></div>
+      <main className="main-content">
+        <Header />
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+        <div className="dashboard-content">
+          {renderSection()}
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+          <footer className="dashboard-footer">
+            <span>VERIGATE © 2026</span>
+            <span>SECURE ACCESS · PRIVACY FIRST · FAIL-SAFE BY DESIGN</span>
+          </footer>
+        </div>
+      </main>
+    </div>
   )
 }
 
 export default App
+
+
+
+// import Sidebar from './components/Sidebar'
+// import Header from './components/Header'
+// import VerificationPanel from './components/VerificationPanel'
+// import ContextPanel from './components/ContextPanel'
+// import AuthFactors from './components/AuthFactors'
+// import OfflinePanel from './components/OfflinePanel'
+// import AccessLogs from './components/AccessLogs'
+// import SystemStatus from './components/SystemStatus'
+// import './App.css'
+
+// function App() {
+//   return (
+//     <div className="app-shell">
+//       <Sidebar />
+
+//       <main className="main-content">
+//         <Header />
+
+//         <div className="dashboard-content">
+//           <div className="welcome-banner">
+//             <div>
+//               <span className="eyebrow">CAMPUS SECURITY INTELLIGENCE</span>
+//               <h2>Welcome to VeriGate <span>✦</span></h2>
+//               <p>
+//                 Intelligent identity verification and secure campus access,
+//                 all in one place.
+//               </p>
+//             </div>
+
+//             <div className="welcome-decoration">
+//               <div className="orbit orbit-one" />
+//               <div className="orbit orbit-two" />
+//               <div className="shield-symbol">⬡</div>
+//             </div>
+//           </div>
+
+//           <div className="overview-grid">
+//             <div className="stat-card">
+//               <span className="stat-icon blue">◎</span>
+//               <span className="stat-label">SYSTEM STATUS</span>
+//               <strong><SystemStatus online={true} /></strong>
+//               <span className="stat-caption">Demo connectivity state</span>
+//             </div>
+
+//             <div className="stat-card">
+//               <span className="stat-icon green">✓</span>
+//               <span className="stat-label">AUTHENTICATION</span>
+//               <strong>Multi-factor</strong>
+//               <span className="stat-caption">Modular security enabled</span>
+//             </div>
+
+//             <div className="stat-card">
+//               <span className="stat-icon purple">⌁</span>
+//               <span className="stat-label">ACCESS POLICY</span>
+//               <strong>Context-aware</strong>
+//               <span className="stat-caption">Schedule + location checks</span>
+//             </div>
+
+//             <div className="stat-card">
+//               <span className="stat-icon orange">◷</span>
+//               <span className="stat-label">SECURITY MODE</span>
+//               <strong>Fail-safe</strong>
+//               <span className="stat-caption">Never fail open</span>
+//             </div>
+//           </div>
+
+//           <div className="dashboard-grid">
+//             <VerificationPanel />
+//             <ContextPanel />
+//             <AuthFactors />
+//             <OfflinePanel />
+//           </div>
+
+//           <AccessLogs />
+
+//           <footer className="dashboard-footer">
+//             <span>VERIGATE © 2026</span>
+//             <span>SECURE ACCESS · PRIVACY FIRST · FAIL-SAFE BY DESIGN</span>
+//           </footer>
+//         </div>
+//       </main>
+//     </div>
+//   )
+// }
+
+// export default App
