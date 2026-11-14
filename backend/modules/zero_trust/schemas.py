@@ -46,7 +46,7 @@ Score = Annotated[FiniteFloat, Field(ge=0, le=100)]
 class DomainModel(BaseModel):
     """Common strict model configuration: reject unknown fields and freeze values."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
 
 
 class RequestedResource(DomainModel):

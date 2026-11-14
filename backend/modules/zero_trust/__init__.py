@@ -32,6 +32,17 @@ from .schemas import (
     VerificationEvidence,
     ZeroTrustAuditEvent,
 )
+from .evidence_validator import (
+    EvidenceFreshnessPolicy,
+    EvidenceIssue,
+    EvidenceRequirements,
+    EvidenceValidationReasonCode,
+    EvidenceValidationResult,
+    EvidenceValidator,
+    TrustedEvidence,
+    TrustedIssuerAdapter,
+    TrustedIssuerProvider,
+)
 
 __all__ = [
     "AccessAction",
@@ -44,6 +55,12 @@ __all__ = [
     "DecisionResponse",
     "DisciplinarySuspensionRecord",
     "EvidenceOutcome",
+    "EvidenceFreshnessPolicy",
+    "EvidenceIssue",
+    "EvidenceRequirements",
+    "EvidenceValidationReasonCode",
+    "EvidenceValidationResult",
+    "EvidenceValidator",
     "EvaluationContext",
     "EvidenceProvenance",
     "EvidenceSummary",
@@ -59,6 +76,9 @@ __all__ = [
     "RevocationState",
     "RevocationStatusRecord",
     "TemporaryLabPassRecord",
+    "TrustedEvidence",
+    "TrustedIssuerAdapter",
+    "TrustedIssuerProvider",
     "VerificationEvidence",
     "VerificationModule",
     "ZeroTrustAuditEvent",
