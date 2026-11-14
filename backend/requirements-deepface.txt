@@ -2,3 +2,5 @@
 # The upstream package defines its own base requirements and optional backend extras.
 -r requirements.txt
 -e ./backend/external/deepface
+# GUI-enabled OpenCV for the optional local webcam demo. Replace DeepFace's headless wheel after install.
+opencv-contrib-python>=4.9,<5

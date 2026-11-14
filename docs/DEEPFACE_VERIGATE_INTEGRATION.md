@@ -36,3 +36,21 @@ On Windows, the local prototype stores only embeddings encrypted with user-scope
 The routes exist, but production authentication is intentionally unavailable until the host wires `get_authenticated_principal` to a verified token or terminal identity provider. Enrollment, status and deletion require `face:enroll` or `admin`. `/verify` additionally requires a trusted attempt ID and in-process evidence sink. A match must equal the authenticated principal before trusted evidence can be emitted. The current branch has no such provider/sink, so these routes fail closed with HTTP 503 by default; this is an integration boundary, not a functioning end-to-end login flow. Face recognition evidence never grants campus access and cannot replace liveness or the deterministic decision engine.
 
 No AWS enrollment store is implemented. No AWS resources were created or changed. The local SQLite/DPAPI store is a development adapter, not a multi-instance production data store.
+
+## Local live-camera identity demo
+
+Run `backend/demo_live_camera.py` from the repository root with `--allow-test-protector --synthetic-test-data-only`. The demo uses the existing provider, service and SQLite repository with a disposable temporary database. It accepts enrollment IDs beginning with `TEST` only, refuses production-marked environments, and requires explicit confirmation that only synthetic test faces will be presented. The test protector is reversible and is never used by the production application. The camera flow performs identity recognition only; it does not test liveness or spoof resistance. Do not use student or other real-person biometric data.
+
+The DeepFace package installs `opencv-contrib-python-headless`, which cannot display a camera window. The optional requirements also include the GUI-enabled `opencv-contrib-python`; on Windows replace the headless wheel after installing the requirements:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements-deepface.txt
+.\.venv\Scripts\python.exe -m pip uninstall -y opencv-contrib-python-headless
+.\.venv\Scripts\python.exe -m pip install --force-reinstall --no-deps "opencv-contrib-python>=4.9,<5"
+$env:PYTHONUTF8 = '1'
+.\.venv\Scripts\python.exe backend\demo_live_camera.py --allow-test-protector --synthetic-test-data-only
+```
+
+The first model/detector use may download DeepFace weights. In the camera window, press **E** and enter a `TEST...` ID to enroll, **V** to recognize the current face, or **Q** to quit. The host must have a camera and GUI-capable OpenCV. FastAPI's enrollment and recognition routes still require host authentication providers; this local harness does not bypass those checks.

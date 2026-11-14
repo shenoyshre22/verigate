@@ -17,16 +17,7 @@ from backend.modules.face_recognition.router import (
 )
 from backend.modules.face_recognition.service import FaceIdentityService
 from backend.modules.face_recognition.storage import SQLiteFaceEnrollmentStore
-
-
-class TestProtector:
-    def protect(self, data: bytes, context: bytes) -> bytes:
-        return b"test-ciphertext:" + bytes(byte ^ 0x5A for byte in data)
-
-    def unprotect(self, data: bytes, context: bytes) -> bytes:
-        if not data.startswith(b"test-ciphertext:"):
-            raise ValueError("invalid ciphertext")
-        return bytes(byte ^ 0x5A for byte in data[len(b"test-ciphertext:"):])
+from backend.tests.face_recognition.demo_protector import TestProtector
 
 
 class FakeProvider:
