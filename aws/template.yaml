@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: VERIGATE backend - HTTP API + one Lambda (FastAPI via Mangum) + DynamoDB. Do not deploy without team approval.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+  CollectionId:
+    Type: String
+    Default: verigate-faces
+    Description: Rekognition face collection holding enrolled face vectors (no raw images in DynamoDB).
+  BedrockModelId:
+    Type: String
+    Default: ""
+    Description: Inference-profile ID enabled in the sandbox (e.g. a us. prefixed ID). Leave empty to disable reports.
+  AllowClientEvidence:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Accept client-reported liveness scores. Keep false; true only for an engine demo without Face Liveness.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [x86_64]
+    Timeout: 30
+    MemorySize: 1024
+
+Resources:
+  IdentitiesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub verigate-${Stage}-identities
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: person_id, AttributeType: S }
+        - { AttributeName: rfid_card_id, AttributeType: S }
+      KeySchema:
+        - { AttributeName: person_id, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: by-card
+          KeySchema:
+            - { AttributeName: rfid_card_id, KeyType: HASH }
+          Projection: { ProjectionType: ALL }
+
+  AuthorizationTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub verigate-${Stage}-authorization
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: person_id, AttributeType: S }
+        - { AttributeName: grant_key, AttributeType: S }
+      KeySchema:
+        - { AttributeName: person_id, KeyType: HASH }
+        - { AttributeName: grant_key, KeyType: RANGE }
+      TimeToLiveSpecification: { AttributeName: expires_at, Enabled: true }
+
+  RevocationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub verigate-${Stage}-revocations
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: subject_id, AttributeType: S }
+      KeySchema:
+        - { AttributeName: subject_id, KeyType: HASH }
+
+  AuditTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub verigate-${Stage}-audit
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: day, AttributeType: S }
+        - { AttributeName: ts_attempt, AttributeType: S }
+      KeySchema:
+        - { AttributeName: day, KeyType: HASH }
+        - { AttributeName: ts_attempt, KeyType: RANGE }
+      TimeToLiveSpecification: { AttributeName: expires_at, Enabled: true }
+
+  # Enrolled face reference images (<person_id>.jpg). Private, encrypted, short-lived, never public.
+  FaceRefsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub verigate-${Stage}-face-refs
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: delete-face-refs-after-7-days
+            Status: Enabled
+            ExpirationInDays: 7
+
+  FaceRefsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FaceRefsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt FaceRefsBucket.Arn
+              - !Sub ${FaceRefsBucket.Arn}/*
+            Condition:
+              Bool: { aws:SecureTransport: "false" }
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [content-type]
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub verigate-${Stage}-api
+      CodeUri: .build/
+      Handler: handler.handler
+      Environment:
+        Variables:
+          IDENTITIES_TABLE: !Ref IdentitiesTable
+          AUTHORIZATION_TABLE: !Ref AuthorizationTable
+          REVOCATIONS_TABLE: !Ref RevocationsTable
+          AUDIT_TABLE: !Ref AuditTable
+          COLLECTION_ID: !Ref CollectionId
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          FACE_REFERENCE_BUCKET: !Ref FaceRefsBucket
+          ALLOW_CLIENT_EVIDENCE: !Ref AllowClientEvidence
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref IdentitiesTable }
+        - DynamoDBReadPolicy: { TableName: !Ref AuthorizationTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref RevocationsTable }
+        - Statement:
+            - Sid: AuditAppendOnly
+              Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:Query, dynamodb:GetItem]
+              Resource: !GetAtt AuditTable.Arn
+            - Sid: FaceLivenessSessions
+              Effect: Allow
+              Action:
+                - rekognition:CreateFaceLivenessSession
+                - rekognition:GetFaceLivenessSessionResults
+                - rekognition:CompareFaces
+                - rekognition:DetectFaces
+              Resource: "*"
+            - Sid: FaceReferenceReadOnly
+              Effect: Allow
+              Action: [s3:GetObject]
+              Resource: !Sub ${FaceRefsBucket.Arn}/*
+            - Sid: FaceCollectionSearch
+              Effect: Allow
+              Action: [rekognition:SearchFacesByImage]
+              Resource: !Sub arn:aws:rekognition:${AWS::Region}:${AWS::AccountId}:collection/${CollectionId}
+            - Sid: BedrockReportsOnly
+              Effect: Allow
+              Action: [bedrock:InvokeModel]
+              Resource:
+                - !Sub arn:aws:bedrock:*::foundation-model/*
+                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+      Events:
+        Proxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: ANY
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      RetentionInDays: 7
+
+Outputs:
+  ApiUrl:
+    Description: Base URL for the frontend (VITE_API_URL)
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+  FunctionName:
+    Value: !Ref ApiFunction
+  IdentitiesTableName:
+    Value: !Ref IdentitiesTable
+  AuthorizationTableName:
+    Value: !Ref AuthorizationTable
+  RevocationsTableName:
+    Value: !Ref RevocationsTable
+  AuditTableName:
+    Value: !Ref AuditTable
+  FaceRefsBucketName:
+    Value: !Ref FaceRefsBucket
