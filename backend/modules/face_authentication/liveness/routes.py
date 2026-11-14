@@ -36,7 +36,9 @@ def get_liveness_service(
 ) -> FaceLivenessService:
     try:
         threshold = float(os.getenv("FACE_LIVENESS_CONFIDENCE_THRESHOLD", "50"))
-        ttl = int(os.getenv("FACE_LIVENESS_SESSION_TTL_SECONDS", "300"))
+        # Rekognition Face Liveness SessionIds expire three minutes after creation.
+        # A slightly shorter local TTL avoids querying AWS at its expiry boundary.
+        ttl = int(os.getenv("FACE_LIVENESS_SESSION_TTL_SECONDS", "170"))
         region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
         if not region:
             raise ValueError("region missing")

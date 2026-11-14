@@ -5,6 +5,7 @@ from botocore.exceptions import ClientError, ReadTimeoutError
 
 from backend.modules.face_authentication.liveness.exceptions import (
     LivenessAccessError,
+    LivenessConfigurationError,
     LivenessOwnershipError,
     LivenessSessionExpiredError,
     LivenessThrottledError,
@@ -133,7 +134,7 @@ def test_expired_result_and_local_session_expiry(setup_liveness):
     store.save_session(
         LivenessSessionOwnership(
             "old-session", "user-1", "attempt-1",
-            datetime.now(timezone.utc) - timedelta(seconds=301),
+            datetime.now(timezone.utc) - timedelta(seconds=171),
         )
     )
     calls_before = client.result_calls
@@ -201,3 +202,10 @@ def test_malformed_create_response_fails_closed():
 
     with pytest.raises(LivenessProviderError):
         service.create_session(user_id="user-1", authentication_attempt_id="attempt-1")
+
+
+@pytest.mark.parametrize("ttl", [0, 181])
+def test_rejects_session_ttl_outside_rekognition_lifetime(ttl):
+    with pytest.raises(LivenessConfigurationError, match="Session TTL"):
+        FaceLivenessService(FakeLivenessClient(), MemoryOwnershipStore(),
+                            live_confidence_threshold=50, session_ttl_seconds=ttl)

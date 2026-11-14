@@ -21,6 +21,8 @@ from .exceptions import (
 )
 from .rekognition_liveness_client import RekognitionLivenessClient
 
+MAX_SESSION_TTL_SECONDS = 180
+
 
 @dataclass(frozen=True)
 class LivenessSessionOwnership:
@@ -58,15 +60,17 @@ class FaceLivenessService:
         ownership_store: LivenessOwnershipStore,
         *,
         live_confidence_threshold: float,
-        session_ttl_seconds: int = 300,
+        session_ttl_seconds: int = 170,
         output_config: dict[str, Any] | None = None,
     ) -> None:
         if ownership_store is None:
             raise LivenessConfigurationError("Liveness ownership store is required.")
         if not 0 <= live_confidence_threshold <= 100:
             raise LivenessConfigurationError("Liveness confidence threshold must be between 0 and 100.")
-        if session_ttl_seconds <= 0:
-            raise LivenessConfigurationError("Session TTL must be positive.")
+        if not 0 < session_ttl_seconds <= MAX_SESSION_TTL_SECONDS:
+            raise LivenessConfigurationError(
+                f"Session TTL must be between 1 and {MAX_SESSION_TTL_SECONDS} seconds."
+            )
         self._client = client
         self._store = ownership_store
         self._threshold = live_confidence_threshold
