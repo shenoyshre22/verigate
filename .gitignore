@@ -7,6 +7,8 @@ __pycache__/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+.aws-sam/
+aws/lambda-build/
 
 # Virtual environments
 .venv/

@@ -27,6 +27,7 @@ from .enums import (
     PermissionEffect,
     RecordStatus,
     ResourceSensitivity,
+    RevocationFindingState,
     RevocationState,
     VerificationModule,
 )
@@ -263,17 +264,40 @@ class AccessDecisionResponse(DomainModel):
         return self
 
 
+class AuthorizationAuditSummary(DomainModel):
+    permitted: StrictBool
+    reason_codes: tuple[AccessReasonCode, ...] = ()
+
+
+class ConflictAuditSummary(DomainModel):
+    resolution_count: Annotated[StrictInt, Field(ge=0)]
+    unresolved_conflict_count: Annotated[StrictInt, Field(ge=0)]
+    reason_codes: tuple[AccessReasonCode, ...] = ()
+
+
+class RevocationAuditSummary(DomainModel):
+    state: RevocationFindingState
+    required: StrictBool
+    blocking: StrictBool
+    reason_codes: tuple[AccessReasonCode, ...] = ()
+
+
 class ZeroTrustAuditEvent(DomainModel):
     """Structured audit summary with no raw biometric data or credentials."""
 
     request_id: Identifier
     user_id: Identifier
     resource_id: Identifier
+    authentication_attempt_id: Identifier | None = None
     decision: AccessDecision
     reason_codes: tuple[AccessReasonCode, ...] = Field(min_length=1)
     policy_version: Identifier
     evaluated_at: AwareDatetime
     evidence_summary: EvidenceSummary
+    authorization_summary: AuthorizationAuditSummary | None = None
+    conflict_resolution_summary: ConflictAuditSummary | None = None
+    revocation_summary: RevocationAuditSummary | None = None
+    explanation: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)] | None = None
     record_provenance_summary: tuple[RecordProvenanceSummary, ...] = ()
 
 

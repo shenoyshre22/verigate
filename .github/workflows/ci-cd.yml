@@ -1,0 +1,158 @@
+name: VERIGATE CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '22'
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Run backend tests
+        run: python -m pytest backend/tests -q
+
+  frontend:
+    name: Frontend checks
+    if: hashFiles('frontend/package.json') != ''
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Test frontend
+        run: npm run test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+
+  sam:
+    name: Validate AWS SAM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate SAM template
+        run: sam validate --template-file aws/template.yaml
+
+  deploy-backend:
+    name: Deploy backend to AWS
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, sam]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Assemble Lambda package
+        run: |
+          mkdir -p aws/lambda-build
+          cp aws/lambda/handler.py aws/lambda-build/handler.py
+          cp -R backend aws/lambda-build/backend
+          python -m pip install -r aws/lambda/requirements.txt --target aws/lambda-build
+
+      - name: Build SAM application
+        run: sam build --template-file aws/template.yaml
+
+      - name: Deploy SAM application
+        run: >
+          sam deploy
+          --stack-name verigate-${{ vars.AWS_ENVIRONMENT || 'dev' }}
+          --region "${{ env.AWS_REGION }}"
+          --capabilities CAPABILITY_IAM
+          --no-confirm-changeset
+          --no-fail-on-empty-changeset
+          --resolve-s3
+          --parameter-overrides
+          Stage=${{ vars.AWS_ENVIRONMENT || 'dev' }}
+
+  deploy-frontend:
+    name: Release frontend through Amplify
+    if: >
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.frontend.result == 'success' &&
+      vars.AMPLIFY_APP_ID != ''
+    needs: [frontend]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Start Amplify release
+        run: >
+          aws amplify start-job
+          --app-id "${{ vars.AMPLIFY_APP_ID }}"
+          --branch-name "${{ vars.AMPLIFY_BRANCH_NAME || 'main' }}"
+          --job-type RELEASE
