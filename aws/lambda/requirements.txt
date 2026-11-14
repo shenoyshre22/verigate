@@ -1,0 +1,7 @@
+# Runtime dependencies packaged into the Lambda (boto3/botocore are provided by the python3.12 runtime).
+# Verified by importing backend.app.main and handler in a clean 3.12 venv with only these + boto3.
+fastapi>=0.115,<1.0
+pydantic>=2.0,<3.0
+mangum>=0.17,<1.0
+pillow>=10.4,<12.0          # face_authentication.image_validator
+python-multipart>=0.0.12,<1.0  # FastAPI Form/File in face_authentication.router
