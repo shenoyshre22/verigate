@@ -2,11 +2,15 @@
 
 from fastapi import FastAPI
 
+from backend.modules.face_authentication.router import router as face_authentication_router
+
 app = FastAPI(
     title="VERIGATE Backend",
     description="Zero-Trust multimodal identity verification backend.",
     version="0.1.0",
 )
+
+app.include_router(face_authentication_router)
 
 
 @app.get("/health", tags=["system"])
