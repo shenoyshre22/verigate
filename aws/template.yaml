@@ -84,7 +84,7 @@ Resources:
   FaceRefsBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub verigate-${Stage}-face-refs
+      BucketName: !Sub verigate-${Stage}-face-refs-${AWS::AccountId}  # S3 names are global; account ID avoids clashes
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
