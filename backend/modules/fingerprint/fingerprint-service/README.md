@@ -37,10 +37,16 @@ for diagnostics; with the default unconfigured threshold it always reports
 
 ## Current limitations
 
-- `EnrollmentService` provides local enrollment logic; the console entry point
-  remains an SDK capture/comparison demo and does not invoke enrollment.
-- No fingerprint verification workflow is implemented yet.
-- No HTTP endpoint or AWS integration yet; the team's backend request contract must be agreed first.
+- The console invokes `EnrollmentService` and `VerificationService`; both use
+  the MFS100 capture adapter and local protected storage.
+- The C# source compiles against the installed SDK, but scanner initialization,
+  capture quality, enrollment and 1:1 matching still require a connected device
+  for hardware verification.
+- The default match threshold is intentionally unconfigured, so comparisons
+  return `Indeterminate`; no calibrated threshold is available.
+- There is no HTTP endpoint or trusted evidence adapter yet. VERIGATE's decision
+  API rejects caller-supplied fingerprint results until that adapter and its
+  authenticated user/attempt binding are implemented.
 - No liveness / presentation-attack detection is claimed.
 - This is a development integration utility, not production-ready biometric storage.
 

@@ -16,7 +16,7 @@ JUDGE_CASES = [
      "DENY", "spoof suspected"),
     ("J2", "Suspended: all biometrics pass, disciplinary office says suspended",
      {"person_id": "J2", "rfid_card_id": "CARD-J2", "room_id": "LAB3",
-      "evidence": ev("J2", fingerprint_match=True, challenge_passed=True)},
+      "evidence": ev("J2", challenge_passed=True)},
      "DENY", "suspended"),
     ("J3", "Temporary exam pass: exam schedule + lab pass both valid now",
      {"person_id": "J3", "room_id": "LAB2", "evidence": ev("J3")},
