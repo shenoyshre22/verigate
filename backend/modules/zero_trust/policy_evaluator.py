@@ -3,12 +3,14 @@
 from math import isfinite
 
 from .authorization import AuthorizationEvaluationResult
-from .enums import AccessDecision, AccessReasonCode, VerificationModule
+from .conflict_resolver import RecordResolutionBatch
+from .enums import AccessDecision, AccessReasonCode, RevocationFindingState, VerificationModule
 from .evidence_validator import (
     EvidenceValidationReasonCode,
     EvidenceValidationResult,
 )
 from .schemas import AccessDecisionResponse, AccessRequest, EvaluationContext
+from .revocation import RevocationEvaluationResult
 
 
 class PolicyEvaluator:
@@ -23,11 +25,16 @@ class PolicyEvaluator:
         *,
         decision_latency_ms: float = 0.0,
         audit_reference: str | None = None,
+        record_resolutions: tuple[RecordResolutionBatch, ...] = (),
+        revocation: RevocationEvaluationResult | None = None,
     ) -> AccessDecisionResponse:
         request = AccessRequest.model_validate(request)
         evidence = EvidenceValidationResult.model_validate(evidence)
         authorization = AuthorizationEvaluationResult.model_validate(authorization)
         context = EvaluationContext.model_validate(context)
+        record_resolutions = tuple(RecordResolutionBatch.model_validate(item) for item in record_resolutions)
+        if revocation is not None:
+            revocation = RevocationEvaluationResult.model_validate(revocation)
         if (
             request.request_id != context.request_id
             or request.request_id != authorization.request_id
@@ -39,6 +46,30 @@ class PolicyEvaluator:
             raise ValueError("decision_latency_ms must be a finite, non-negative value")
 
         reason_codes = set(authorization.reason_codes)
+        resolution_denied = False
+        resolution_requires_verification = False
+        for batch in record_resolutions:
+            if batch.evaluated_at != context.evaluated_at:
+                raise ValueError("record resolution timestamp must match evaluation context")
+            for resolution in batch.resolutions:
+                reason_codes.update(resolution.reason_codes)
+                resolution_denied |= resolution.decision is AccessDecision.DENY
+                resolution_requires_verification |= resolution.decision is AccessDecision.REQUEST_VERIFICATION
+        revocation_denied = False
+        if revocation is not None:
+            if (
+                revocation.subject_id != request.user_id
+                or revocation.resource_id != request.resource.resource_id
+                or revocation.evaluated_at != context.evaluated_at
+            ):
+                raise ValueError("revocation result must match request subject, resource, and evaluation time")
+            reason_codes.update(revocation.reason_codes)
+            if revocation.state is RevocationFindingState.CONFIRMED_REVOCATION:
+                reason_codes.add(AccessReasonCode.IDENTITY_REVOKED)
+            revocation_denied = (
+                revocation.blocking
+                or revocation.state is RevocationFindingState.CONFIRMED_REVOCATION
+            )
         accepted_evidence_is_correlated = all(
             item.evidence.user_id == request.user_id
             and item.evidence.authentication_attempt_id == request.authentication_attempt_id
@@ -64,8 +95,10 @@ class PolicyEvaluator:
         if not evidence_is_sufficient:
             reason_codes.add(self._evidence_reason(evidence))
 
-        if not authorization.permitted or has_spoof:
+        if not authorization.permitted or has_spoof or resolution_denied or revocation_denied:
             decision = AccessDecision.DENY
+        elif resolution_requires_verification:
+            decision = AccessDecision.REQUEST_VERIFICATION
         elif not evidence_is_sufficient:
             decision = (
                 AccessDecision.REQUEST_VERIFICATION
@@ -128,6 +161,8 @@ class PolicyEvaluator:
         if decision is AccessDecision.ALLOW:
             return "Identity evidence and all configured campus authorization checks passed."
         if decision is AccessDecision.REQUEST_VERIFICATION:
+            if AccessReasonCode.RECORD_CONFLICT in reason_codes:
+                return "Conflicting campus records require review; access has not been granted."
             return "Campus authorization passed; additional identity verification is required."
         return "Access denied: " + ", ".join(
             code.value for code in sorted(reason_codes, key=lambda code: code.value)

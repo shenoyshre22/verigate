@@ -13,7 +13,7 @@ from .enums import (
     PermissionEffect,
     RecordStatus,
     ResourceSensitivity,
-    RevocationState,
+    RevocationFindingState,
 )
 from .schemas import (
     AccessRequest,
@@ -31,6 +31,7 @@ from .schemas import (
     RevocationStatusRecord,
     TemporaryLabPassRecord,
 )
+from .revocation import RevocationChecker, RevocationPolicy
 
 
 PositiveDuration = Annotated[timedelta, Field(gt=timedelta(0))]
@@ -310,42 +311,28 @@ class CampusAuthorizationEvaluator:
         reasons,
         provenance,
     ) -> None:
-        records = [
-            record
-            for record in snapshot.revocations
-            if record.subject_id == user_id
-            and (record.resource_id is None or record.resource_id == resource_id)
-        ]
-        for record in records:
-            self._record_provenance(record, provenance)
-            if record.revocation_state is RevocationState.REVOKED:
-                reasons.add(AccessReasonCode.IDENTITY_REVOKED)
-
-        if any(record.revocation_state is RevocationState.REVOKED for record in records):
-            return
-
-        must_check = sensitivity in policy.require_fresh_revocation_for
-        max_age = policy.revocation_max_age_by_sensitivity.get(sensitivity)
-        if not must_check and max_age is None:
-            return
-        if max_age is None:
-            reasons.add(AccessReasonCode.REVOCATION_UNAVAILABLE)
-            return
-
-        fresh_clear = [
-            record
-            for record in records
-            if record.revocation_state is RevocationState.CLEAR
-            and record.status is RecordStatus.ACTIVE
-            and self._date_state(record, now) == "IN_WINDOW"
-            and timedelta(0) <= now - record.observed_at <= max_age
-        ]
-        if fresh_clear:
-            return
-        if records:
-            reasons.add(AccessReasonCode.REVOCATION_STALE)
-        else:
-            reasons.add(AccessReasonCode.REVOCATION_UNAVAILABLE)
+        revocation_policy = RevocationPolicy(
+            required_for=policy.require_fresh_revocation_for,
+            max_age_by_sensitivity=policy.revocation_max_age_by_sensitivity,
+        )
+        result = RevocationChecker().evaluate(
+            subject_id=user_id,
+            resource_id=resource_id,
+            records=snapshot.revocations,
+            sensitivity=sensitivity,
+            evaluated_at=now,
+            policy=revocation_policy,
+        )
+        for record in snapshot.revocations:
+            if any(
+                item.record_id == record.record_id and item.source_id == record.source_id
+                for item in result.applicable_records
+            ):
+                self._record_provenance(record, provenance)
+        if result.state is RevocationFindingState.CONFIRMED_REVOCATION:
+            reasons.add(AccessReasonCode.IDENTITY_REVOKED)
+        elif result.blocking:
+            reasons.update(result.reason_codes)
 
     def _active_roles(self, snapshot, user_id, now, provenance) -> set[CampusRole]:
         roles: set[CampusRole] = set()
