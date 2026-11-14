@@ -1,0 +1,4 @@
+# Optional, isolated DeepFace integration dependencies. Run from the repository root.
+# The upstream package defines its own base requirements and optional backend extras.
+-r ./backend/requirements.txt
+-e ./backend/external/deepface

@@ -35,6 +35,7 @@ class RecognitionResponse(BaseModel):
     threshold: float
     preprocessing_latency_ms: float
     aws_latency_ms: float
+    provider_latency_ms: float
     total_latency_ms: float
 
 
@@ -48,13 +49,28 @@ def get_recognition_service() -> FaceRecognitionService:
             detail="Face reference provider is not configured.",
         )
     try:
+        engine = os.getenv("FACE_RECOGNITION_ENGINE", "rekognition").strip().lower()
         threshold = float(os.getenv("FACE_SIMILARITY_THRESHOLD", "80"))
     except ValueError as error:
         raise HTTPException(status_code=500, detail="Face similarity threshold configuration is invalid.") from error
+    if engine == "rekognition":
+        recognition_client = RekognitionFaceRecognitionClient()
+    elif engine == "deepface":
+        from .deepface_client import DeepFaceRecognitionClient
+
+        recognition_client = DeepFaceRecognitionClient(
+            model_name=os.getenv("DEEPFACE_MODEL_NAME", "ArcFace"),
+            detector_backend=os.getenv("DEEPFACE_DETECTOR_BACKEND", "opencv"),
+        )
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Face recognition engine configuration is invalid.",
+        )
     try:
         return FaceRecognitionService(
             reference_provider=DirectoryReferenceImageProvider(Path(references_dir)),
-            recognition_client=RekognitionFaceRecognitionClient(),
+            recognition_client=recognition_client,
             similarity_threshold=threshold,
         )
     except ValueError as error:

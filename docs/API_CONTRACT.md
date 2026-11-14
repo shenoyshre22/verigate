@@ -46,7 +46,14 @@ The current development provider reads `<user_id>.jpg`, `.jpeg`, or `.png`
 from `FACE_REFERENCE_DIR`. Production must use an appropriately enrolled
 reference provider. The endpoint requires exactly one detectable face in each
 image and returns a measured similarity score, the configured threshold, and
-separate preprocessing, AWS, and total recognition latency fields.
+separate preprocessing, AWS, provider, and total recognition latency fields.
+
+`FACE_RECOGNITION_ENGINE` selects exactly one comparison backend per process:
+`rekognition` (default) or optional `deepface`. DeepFace is selected only after
+installing the isolated dependencies from `backend/requirements-deepface.txt`.
+The recognition route remains 1:1 against the submitted `user_id`; it does not
+perform campus-wide identity retrieval or create trusted decision-engine
+evidence.
 
 The response status is `MATCH` or `NO_MATCH`. It describes identity recognition
 only; it is not the combined Face Authentication decision. The configurable

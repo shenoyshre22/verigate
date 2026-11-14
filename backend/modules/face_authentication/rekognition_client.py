@@ -22,6 +22,8 @@ from .recognition_exceptions import (
 class RekognitionMeasurement:
     similarity: float | None
     aws_latency_ms: float
+    provider_match: bool | None = None
+    provider_latency_ms: float | None = None
 
 
 class FaceRecognitionClient(Protocol):

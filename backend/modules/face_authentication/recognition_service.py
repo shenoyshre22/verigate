@@ -18,6 +18,7 @@ class RecognitionResult:
     threshold: float
     preprocessing_latency_ms: float
     aws_latency_ms: float
+    provider_latency_ms: float
     total_latency_ms: float
 
 
@@ -46,7 +47,11 @@ class FaceRecognitionService:
             reference_image=validated_reference.data,
             submitted_image=validated_submitted.data,
         )
-        matched = measurement.similarity is not None and measurement.similarity >= self._similarity_threshold
+        matched = (
+            measurement.similarity is not None
+            and measurement.similarity >= self._similarity_threshold
+            and measurement.provider_match is not False
+        )
         return RecognitionResult(
             user_id=user_id,
             status="MATCH" if matched else "NO_MATCH",
@@ -55,5 +60,10 @@ class FaceRecognitionService:
             threshold=self._similarity_threshold,
             preprocessing_latency_ms=preprocessing_latency_ms,
             aws_latency_ms=measurement.aws_latency_ms,
+            provider_latency_ms=(
+                measurement.provider_latency_ms
+                if measurement.provider_latency_ms is not None
+                else measurement.aws_latency_ms
+            ),
             total_latency_ms=(time.perf_counter() - total_started) * 1000,
         )
