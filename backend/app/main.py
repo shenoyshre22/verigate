@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from backend.modules.face_authentication.router import router as face_authentication_router
+from backend.modules.face_recognition.router import router as face_recognition_router
 
 app = FastAPI(
     title="VERIGATE Backend",
@@ -11,6 +12,7 @@ app = FastAPI(
 )
 
 app.include_router(face_authentication_router)
+app.include_router(face_recognition_router)
 
 
 @app.get("/health", tags=["system"])

@@ -45,4 +45,10 @@ The campus user ID must come from an authenticated identity mapping, not from an
 - Whether the existing seven-day S3 policy is temporary and what durable retention should replace it.
 - Trusted device/terminal authentication and the exact API routes requiring authorization.
 
-Until these are resolved, this repository contains the upstream DeepFace source and architecture findings, but no DeepFace AWS enrollment/recognition service or AWS resource changes.
+## Phase 2 local implementation status
+
+The separate DeepFace 1:N module uses Windows DPAPI-protected embeddings in a local SQLite development store. It does not use DynamoDB, S3 or live AWS calls. No AWS resources were created or modified. The existing DynamoDB identity table must not be treated as a vector index.
+
+For an AWS deployment, use DynamoDB for enrollment metadata and a stable biometric-record reference (user ID, status, model/version, timestamps, audit reference), with conditional writes and narrowly scoped IAM. Keep vector search in a purpose-built protected store such as PostgreSQL with pgvector and encryption at rest using a customer-managed KMS key, with network isolation and application-level authorization. Avoid storing biometric embeddings directly in DynamoDB unless a separate threat model and encryption design approve that choice. Do not retain raw enrollment images in S3 by default. If retention is explicitly required, use a private bucket, KMS encryption, strict lifecycle/deletion controls and audited access. This is a design recommendation only; it is not deployed or wired in this phase.
+
+The local API router is registered, but its authentication principal, attempt provider and trusted evidence sink deliberately default to unavailable. Until the host application provides verified authentication and an approved evidence consumer, protected operations fail closed with 503. No production end-to-end enrollment or Zero Trust delivery is claimed.
