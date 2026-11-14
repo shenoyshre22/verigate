@@ -290,3 +290,21 @@ CompareFaces, `s3:GetObject` on `verigate-dev-face-refs-<account-id>/*`. 0 misma
 
 Not yet live-tested: server-side face match against an S3 reference photo. No consented reference photo has been
 uploaded yet. It is covered by mocked tests: match, mismatch, no reference, reused session, unknown session, spoof.
+
+## Bedrock (live)
+
+2026-11-14 09:07 UTC, deployed (`UPDATE_COMPLETE`). Model: `BEDROCK_MODEL_ID=us.anthropic.claude-haiku-5-5` (inference profile from RECON.md).
+IAM: `bedrock:InvokeModel` only on that profile and `anthropic.claude-haiku-5-5` in us-east-1, us-east-2 and us-west-2.
+**The SCP does not block InvokeModel.** Haiku 5.5 rejects `temperature` as deprecated, so the code retries without it
+(`temperature_applied: false`). Only decision, reasons, mode and computed numbers are sent: no images, evidence or IDs.
+
+| Call | Decision (unchanged) | Explanation / summary | source | latency_ms |
+|------|----------------------|-----------------------|--------|-----------|
+| `POST /decision/explain {"request_id":"1e0bf395cb6e409d8ce21c1c33364b7f"}` (J1 spoof) | DENY | "The access request was denied because the system flagged a suspected spoof (the liveness check returned SPOOF), and the decision is recorded as DENY in online mode." | bedrock | 1306.6 |
+| `POST /decision/explain {"request_id":"331f0ec051d44984b039374c9f6e3540"}` (J3 exam + pass) | ALLOW | "Access is allowed because the person is a live, verified individual who is authorized for this room at this time." | bedrock | 1192.6 |
+| `POST /report/summary {}` | n/a | 5 bullets: 38 decisions (12 ALLOW / 19 DENY / 7 REQUEST_VERIFICATION), 4 spoof denials, 2 stale-revocation denials, 4 conflicts, 4 offline-synced, avg 313.87 ms / p95 1500.32 ms (34 samples) | bedrock | 2870.4 |
+
+The metrics are computed in code; Bedrock only words them. Fix found live: the first summary came back cut off,
+because Haiku 5.5's reasoning tokens count against maxTokens. Now a `stopReason: max_tokens` response always falls back
+to deterministic text, and the budgets are 300 (explain) and 1000 (summary). Any Bedrock error returns
+`"source": "fallback"` with deterministic text, and the decision is unchanged (covered by tests).

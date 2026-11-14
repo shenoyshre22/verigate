@@ -8,8 +8,12 @@ Parameters:
     Default: dev
   BedrockModelId:
     Type: String
-    Default: ""
-    Description: Inference-profile ID enabled in the sandbox (e.g. a us. prefixed ID). Leave empty to disable reports.
+    Default: us.anthropic.claude-haiku-5-5
+    Description: Cross-region inference profile for explanations/summaries (aws/RECON.md). Explains only, never decides.
+  BedrockFoundationModel:
+    Type: String
+    Default: anthropic.claude-haiku-5-5
+    Description: Foundation model the profile routes to (us-east-1, us-east-2, us-west-2 per get-inference-profile).
   AllowClientEvidence:
     Type: String
     Default: "false"
@@ -160,6 +164,10 @@ Resources:
               Effect: Allow
               Action: [dynamodb:PutItem, dynamodb:GetItem]
               Resource: !GetAtt AuditTable.Arn
+            - Sid: AuditReadByDay            # reporting: query one day partition (explain / summary)
+              Effect: Allow
+              Action: [dynamodb:Query]
+              Resource: !GetAtt AuditTable.Arn
             - Sid: FaceLivenessAndCompare    # these Rekognition actions do not support resource-level permissions
               Effect: Allow
               Action:
@@ -172,12 +180,14 @@ Resources:
               Effect: Allow
               Action: [s3:GetObject]
               Resource: !Sub ${FaceRefsBucket.Arn}/*
-            - Sid: BedrockReportsOnly
+            - Sid: BedrockReportsOnly        # Converse = InvokeModel; this profile and the models it routes to only
               Effect: Allow
               Action: [bedrock:InvokeModel]
               Resource:
-                - !Sub arn:aws:bedrock:*::foundation-model/*
-                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${BedrockModelId}
+                - !Sub arn:aws:bedrock:us-east-1::foundation-model/${BedrockFoundationModel}
+                - !Sub arn:aws:bedrock:us-east-2::foundation-model/${BedrockFoundationModel}
+                - !Sub arn:aws:bedrock:us-west-2::foundation-model/${BedrockFoundationModel}
       Events:
         Proxy:
           Type: HttpApi

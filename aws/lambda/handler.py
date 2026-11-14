@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 # (module path, a path the router serves). The reporting router is optional and may not exist yet.
 EXTRA_ROUTERS = [
     ("backend.modules.decision_engine.api", "/decision/evaluate"),
-    ("backend.modules.reporting.api", "/reports/explain"),
+    ("backend.modules.reporting.api", "/report/summary"),
     # Shreya's liveness router. By its own design it answers 503 until the host app overrides
     # get_authenticated_user_id and get_ownership_store, so mounting it never opens anything.
     ("backend.modules.face_authentication.liveness.routes", "/face-auth/liveness/session"),
@@ -58,7 +58,8 @@ def include_missing_routers(fastapi_app, routers=EXTRA_ROUTERS) -> list:
         try:
             module = importlib.import_module(module_path)
         except ModuleNotFoundError as e:
-            if e.name != module_path:
+            missing = e.name or ""
+            if not (module_path == missing or module_path.startswith(missing + ".")):
                 raise  # the module exists but one of its own imports is broken: fail loudly
             continue
         fastapi_app.include_router(module.router)

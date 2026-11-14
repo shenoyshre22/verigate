@@ -70,5 +70,5 @@ def test_skips_router_main_already_includes_with_prefix(handler_module):
 
 def test_missing_optional_router_is_skipped(handler_module):
     app = FastAPI()
-    added = handler_module.include_missing_routers(app, [("backend.modules.reporting.api", "/reports/explain")])
+    added = handler_module.include_missing_routers(app, [("backend.modules.not_written_yet.api", "/nope")])
     assert added == []
