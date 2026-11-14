@@ -256,3 +256,37 @@ role's own reads (identities incl. GSI, grants, revocations) and audit writes th
 - Server-verified liveness: the demo runs with `AllowClientEvidence=true`, because no route creates sessions yet.
 - Rekognition Face Liveness (no route creates sessions yet) and CompareFaces with S3 references (needs Shreya's S3 provider and an uploaded `<person_id>.jpg`).
 - Bedrock invoke (checkpoint 5).
+
+## Redeploy 5: full deploy, tightened IAM + liveness session route (live)
+
+2026-11-14 08:40 UTC, `UPDATE_COMPLETE`, `AllowClientEvidence=true`, reseeded. ApiUrl: `https://y6v7j9rp2j.execute-api.us-east-1.amazonaws.com`
+
+| Check | Result |
+|-------|--------|
+| `GET /health` | 200 `{"status":"ok"}` |
+| `GET /docs` | 200. OpenAPI paths: `/decision/evaluate`, `/decision/liveness-session`, `/decision/offline-sync`, `/api/v1/face-auth/liveness/session`, `/api/v1/face-auth/liveness/session/{session_id}/result`, `/api/v1/face-auth/recognize`, `/health` |
+| `POST /decision/liveness-session` `{"person_id":"S1"}` | **201** `{"session_id":"21140c8d-d6d9-453e-9886-87327bb1fe7e","expires_at":"2026-11-14T08:52:59Z","ttl_seconds":600,"bound_to":"S1"}`, a real Rekognition session |
+| Shreya's `POST /api/v1/face-auth/liveness/session` | 503 `Authentication principal is not configured.` (fails closed until auth and ownership are wired) |
+
+Judge scenarios rerun on the deployed code: **8/8 PASS**.
+
+| Case | Decision | decision_ms |
+|------|----------|-------------|
+| J1 spoof | DENY (spoof suspected, liveness status SPOOF) | 163.04 |
+| J2 suspended | DENY (person is suspended) | 26.05 |
+| J3 exam + lab pass | ALLOW | 17.01 |
+| J3 pass expired | DENY (requires a valid temporary lab pass) | 17.62 |
+| J4 stale revocation, EXAMHALL | DENY (sensitive room stays closed) | 30.45 |
+| J4 stale revocation, LAB3 | REQUEST_VERIFICATION | 23.96 |
+| J5 conflict, LAB3 | REQUEST_VERIFICATION (hr=inactive, registrar=active) | 21.16 |
+| J5 conflict, EXAMHALL | DENY | 22.94 |
+
+Audit chain for this run: seq 27-34 verify, and HEAD matches the last record.
+
+Deployed role, checked with the IAM simulator after the deploy: the removed permissions are now denied:
+`dynamodb:PutItem` / `DeleteItem` on revocations, `Scan` on identities, `Query` on audit, `rekognition:SearchFacesByImage`.
+The needed ones are still allowed: GetItem revocations, Query `identities/index/by-card`, CreateFaceLivenessSession,
+CompareFaces, `s3:GetObject` on `verigate-dev-face-refs-<account-id>/*`. 0 mismatches.
+
+Not yet live-tested: server-side face match against an S3 reference photo. No consented reference photo has been
+uploaded yet. It is covered by mocked tests: match, mismatch, no reference, reused session, unknown session, spoof.
