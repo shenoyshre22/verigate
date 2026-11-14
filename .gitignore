@@ -24,7 +24,7 @@ dist/
 *.egg-info/
 .vscode/
 .idea/
-
+backend/modules/fingerprint/data
 # OS files
 .DS_Store
 Thumbs.db
