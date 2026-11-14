@@ -8,7 +8,7 @@ Account IDs are masked as `<account-id>`.
 - Caller: `WSParticipantRole/Participant` (profile `hid`)
 - Parameters: `Stage=dev`, `AllowClientEvidence=true` (**demo mode**; switch to `false` once a liveness-session route exists), `BedrockModelId` empty (reports disabled)
 - Deploys: 1) first deploy, CREATE_COMPLETE. 2) handler includes the decision router, S1..S5 seeded, UPDATE_COMPLETE 07:33 UTC.
-  3) audit number canonicalization fix, UPDATE_COMPLETE 07:37 UTC.
+  3) audit number canonicalization fix, UPDATE_COMPLETE 07:37 UTC. 4) judge-scenario rules (code only), UPDATE_COMPLETE 07:51 UTC.
 
 ## Deploy steps run
 
@@ -48,7 +48,7 @@ At first deploy `/decision/*` returned 404 because `backend/app/main.py` did not
 Since redeploy 2, `aws/lambda/handler.py` includes it when main.py has not (it checks the served paths, so
 there is never a duplicate once Shreya adds `app.include_router(decision_engine_router)` herself).
 
-## Judge scenarios on the live ApiUrl (redeploy 3, 2026-11-14 07:38 UTC)
+## Scenarios S1..S5 on the live ApiUrl (redeploy 3, 2026-11-14 07:38 UTC)
 
 Seeded synthetic people S1..S5 (`aws/dynamodb/seed.py`). `AllowClientEvidence=true`, so liveness and face
 scores are client-reported for this demo and recorded as such in the audit item (`evidence_source`).
@@ -113,6 +113,42 @@ verified. Fix (redeploy 3): numbers are hashed in DynamoDB's canonical form on w
 old form, and rewriting audit records to "fix" them would defeat the point of a tamper-evident log.
 
 Per-record result: seq 1-6 fail (pre-fix online records), seq 7-16 verify.
+
+## Judge scenarios (live)
+
+Run on the live ApiUrl after redeploy 4 (code only), 2026-11-14 07:51 UTC, `POST <ApiUrl>/decision/evaluate`.
+Synthetic people J1..J5 come from `aws/dynamodb/seed.py`. The request bodies are the shared
+`backend/tests/decision_engine/judge_cases.py`, which `test_judge.py` also runs against exactly the seeded records.
+`AllowClientEvidence=true` (demo), so liveness inputs are client-reported and marked so in the audit record.
+`decision_ms` is measured inside the Lambda. **8/8 matched the expected decision.**
+
+| Case | What the records say | Request | Decision | Reasons (verbatim) | decision_ms |
+|------|----------------------|---------|----------|--------------------|-------------|
+| **J1** Spoof | active, scheduled in LAB3 | `{"person_id":"J1","rfid_card_id":"CARD-J1","room_id":"LAB3","evidence":{"face_person_id":"J1","face_similarity":99.0,"liveness_status":"SPOOF"}}` | **DENY** | spoof suspected (liveness status SPOOF) | 436.72 (cold DynamoDB client) |
+| **J2** Suspended | registrar: active (v4); disciplinary_office: suspended (v2) | `{"person_id":"J2","rfid_card_id":"CARD-J2","room_id":"LAB3","evidence":{"liveness":97.0,"face_similarity":99.0,"face_person_id":"J2","fingerprint_match":true,"challenge_passed":true}}` | **DENY** | person is suspended (disciplinary record) | 33.31 |
+| **J3** Temporary exam pass | LAB2 exam schedule (`requires_pass`) active + invigilator lab pass valid now | `{"person_id":"J3","room_id":"LAB2","evidence":{"liveness":97.0,"face_similarity":99.0,"face_person_id":"J3"}}` | **ALLOW** | live person and identity verified; authorized for this room now | 25.70 |
+| J3 expired-pass variant | LAB4 exam schedule active, lab pass expired 30 min ago | as J3, `"room_id":"LAB4"` | **DENY** | exam in this room requires a valid temporary lab pass; none is valid now | 23.53 |
+| **J4** Stale revocation, sensitive room | card issuer `contractor-office`; its revocation feed last refreshed 3 h ago (`refresh_failed`); EXAMHALL exam active | `{"person_id":"J4","rfid_card_id":"CARD-J4","room_id":"EXAMHALL","evidence":{"liveness":97.0,"face_similarity":99.0,"face_person_id":"J4"}}` | **DENY** | revocation list could not be refreshed; sensitive room stays closed | 34.57 |
+| J4 normal-room variant | same, LAB3 | as J4, `"room_id":"LAB3"` | **REQUEST_VERIFICATION** | revocation list could not be refreshed; extra check needed | 30.41 |
+| **J5** Conflicting records | registrar: active (v3); hr: inactive (v3), equal authority | `{"person_id":"J5","room_id":"LAB3","evidence":{"liveness":97.0,"face_similarity":99.0,"face_person_id":"J5"}}` | **REQUEST_VERIFICATION** | conflicting records from equally authoritative sources; manual verification required; equally authoritative sources disagree: hr=inactive, registrar=active | 23.51 |
+| J5 sensitive-room variant | same, EXAMHALL exam active | as J5, `"room_id":"EXAMHALL"` | **DENY** | conflicting authoritative records for a sensitive room; equally authoritative sources disagree: hr=inactive, registrar=active | 22.73 |
+
+All responses: HTTP 200, `"mode":"online"`, `"audited":true`. Round trips from the laptop were 767-1270 ms.
+
+How the engine decides these (deny-first order in `engine.py`):
+1. J1: the worst of the numeric liveness verdict and the reported `liveness_status` is used. SPOOF can't be outweighed by card, face, fingerprint or challenge.
+2. J2: `reconcile.py` keeps each source's latest version. The most authoritative sources decide (disciplinary_office 3 > registrar 2).
+3. J3: a schedule entry with `requires_pass` needs **both** the schedule window and a lab pass window to contain "now".
+4. J4: revocation-feed freshness (`SYNC#<card_issuer>`, 60 min) is separate from record freshness. Stale feed: sensitive room DENY, otherwise REQUEST_VERIFICATION.
+5. J5: equally authoritative sources disagree. The engine never picks one: REQUEST_VERIFICATION, or DENY in a sensitive room.
+
+Audit chain for this run, read back from `verigate-dev-audit`: seq 17-24 (8 records) **verify**, and HEAD matches the last record.
+The audit records carry the facts behind each decision. For example, J5's `context` holds `status: null`,
+`status_sources: ["hr","registrar"]` and `records_conflict: true`. J4's holds `revocation_fresh: false`,
+`card_issuer: "contractor-office"` and `room_sensitive: true`.
+
+Demo note: the campus feed status `SYNC#campus` is fresh for 60 min after seeding. After that, every campus card gets
+REQUEST_VERIFICATION, which is correct behaviour. Before a demo, run `seed.py --stage dev --refresh-sync`.
 
 ## Lambda runtime evidence
 

@@ -66,6 +66,7 @@ class _NoBiometrics(BaseModel):
 class EvidenceIn(_NoBiometrics):
     liveness_session_id: Optional[str] = Field(default=None, pattern=SESSION_ID_PATTERN)
     liveness: Optional[float] = Field(default=None, ge=0, le=100)  # only with ALLOW_CLIENT_EVIDENCE=true
+    liveness_status: Optional[Literal["LIVE", "SPOOF", "UNCERTAIN"]] = None  # same rule as liveness
     face_person_id: Optional[str] = _id()
     face_similarity: Optional[float] = Field(default=None, ge=0, le=100)
     fingerprint_match: Optional[bool] = None
@@ -178,7 +179,8 @@ def evaluate(
     clock: Callable[[], datetime] = Depends(get_clock),
 ) -> EvaluateResponse:
     ein = req.evidence
-    if ein.liveness is not None and not ein.liveness_session_id and not client_evidence_allowed():
+    client_liveness = ein.liveness is not None or ein.liveness_status is not None
+    if client_liveness and not ein.liveness_session_id and not client_evidence_allowed():
         raise HTTPException(status_code=422, detail="client-reported liveness is not accepted; "
                                                     "send evidence.liveness_session_id instead")
     started = time.perf_counter()
@@ -207,13 +209,15 @@ def evaluate(
                 liveness, liveness_src = res.confidence, SERVER
             if res.note:
                 notes.append(res.note)
-        if ein.liveness is not None:
+        if client_liveness:
             notes.append("client-reported liveness ignored; server lookup used")
-    elif ein.liveness is not None:
+    elif client_liveness:
         liveness, liveness_src = ein.liveness, CLIENT
+        liveness_status = ein.liveness_status
 
     evidence_used = {
         "liveness": liveness,
+        "liveness_status": liveness_status if liveness_src == CLIENT else None,
         "face_person_id": ein.face_person_id,
         "face_similarity": ein.face_similarity,
         "fingerprint_match": ein.fingerprint_match,
@@ -221,11 +225,23 @@ def evaluate(
     }
     sources = {k: (CLIENT if v is not None else ABSENT) for k, v in evidence_used.items()}
     sources["liveness"] = liveness_src
+    sources["liveness_status"] = liveness_src if evidence_used["liveness_status"] else ABSENT
+    context_summary: dict = {}
 
     try:
         loaded = loader.load(room_id=room, person_id=req.person_id, rfid_card_id=req.rfid_card_id,
                              online=req.online, now=now)
         person_id = loaded.person_id or req.person_id
+        c, rec = loaded.context, loaded.reconciliation
+        context_summary = {
+            "status": c.person.get("status") if c.person else None,
+            "status_sources": list(rec.sources) if rec else [],
+            "records_conflict": c.records_conflict,
+            "schedule_ok": c.schedule_ok, "temp_pass_valid": c.temp_pass_valid, "pass_required": c.pass_required,
+            "safety_training_required": c.safety_training_required, "safety_training_valid": c.safety_training_valid,
+            "revoked": c.revoked, "revocation_fresh": c.revocation_fresh, "card_issuer": loaded.card_issuer,
+            "records_fresh": c.records_fresh, "room_sensitive": c.room_sensitive,
+        }
         sources["rfid_person_id"] = SERVER if req.rfid_card_id else ABSENT  # resolved from campus records
         ev = Evidence(**evidence_used, rfid_person_id=loaded.card_person_id, liveness_session_reused=reused)
         result = decide(ev, loaded.context)
@@ -249,6 +265,7 @@ def evaluate(
         "evidence_source": sources,  # per field: server-verified / client-reported / absent
         "liveness_session_id": ein.liveness_session_id,
         "liveness_status": liveness_status,
+        "context": context_summary,  # the campus-record facts the decision rested on
         "decided_at": _iso(now),
     }
     audited = True

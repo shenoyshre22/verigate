@@ -60,7 +60,8 @@ def test_server_live_allows_and_records_provenance(client, tables, rekognition):
     assert body["decision"] == "ALLOW"
     [rec] = audit_records(tables)
     assert rec["evidence_source"] == {
-        "liveness": "server-verified", "face_person_id": "client-reported", "face_similarity": "client-reported",
+        "liveness": "server-verified", "liveness_status": "absent",
+        "face_person_id": "client-reported", "face_similarity": "client-reported",
         "fingerprint_match": "absent", "challenge_passed": "absent", "rfid_person_id": "server-verified",
     }
     assert rec["liveness_status"] == "SUCCEEDED" and float(rec["evidence"]["liveness"]) == 98.5

@@ -41,6 +41,15 @@ def liveness_verdict(confidence: Optional[float], t: dict = THRESHOLDS) -> Optio
     return UNCERTAIN
 
 
+def combined_verdict(confidence: Optional[float], status: Optional[str], t: dict = THRESHOLDS) -> Optional[str]:
+    """Worst of the numeric verdict and a reported status (e.g. a PAD sensor): SPOOF > UNCERTAIN > LIVE."""
+    verdicts = {v for v in (liveness_verdict(confidence, t), status) if v}
+    for v in (SPOOF, UNCERTAIN, LIVE):
+        if v in verdicts:
+            return v
+    return None
+
+
 @dataclass
 class Evidence:
     """What the verification modules observed for one access attempt."""
@@ -51,6 +60,7 @@ class Evidence:
     fingerprint_match: Optional[bool] = None  # result of a 1:1 fingerprint step-up, None if not done
     challenge_passed: Optional[bool] = None   # result of a randomized face challenge, None if not done
     liveness_session_reused: bool = False     # the liveness session id was already used (replay)
+    liveness_status: Optional[str] = None     # SPOOF / LIVE / UNCERTAIN reported by a liveness/PAD check
 
 
 @dataclass
@@ -61,8 +71,14 @@ class Context:
     schedule_ok: bool = False           # an official schedule entry allows this room now
     temp_pass_valid: bool = False       # a valid, unexpired lab-specific pass exists
     room_sensitive: bool = False        # exam hall / hazardous lab
-    records_fresh: bool = True          # authorization data is within its freshness window
+    records_fresh: bool = True          # identity/authorization data is within its freshness window
     online: bool = True                 # kiosk can reach the backend
+    revocation_fresh: bool = True       # the revocation feed for this credential refreshed recently
+    pass_required: bool = False         # the active schedule entry (e.g. an exam in a lab) also needs a lab pass
+    safety_training_required: bool = False  # hazardous lab: valid lab safety training required
+    safety_training_valid: bool = False
+    records_conflict: bool = False      # equally authoritative sources disagree on the person's status
+    conflict_detail: str = ""
 
 
 @dataclass
@@ -95,17 +111,22 @@ def decide(ev: Evidence, ctx: Context, t: dict = THRESHOLDS) -> Decision:
     # 1. Liveness failure or a replayed liveness session cannot be overridden by any other module.
     if ev.liveness_session_reused:
         return Decision(DENY, ["liveness session was already used (replay suspected)"])
-    verdict = liveness_verdict(ev.liveness, t)
+    verdict = combined_verdict(ev.liveness, ev.liveness_status, t)
     if verdict == SPOOF:
-        return Decision(DENY, [f"spoof suspected (liveness {ev.liveness:.0f}%)"])
+        detail = f"liveness {ev.liveness:.0f}%" if liveness_verdict(ev.liveness, t) == SPOOF else "liveness status SPOOF"
+        return Decision(DENY, [f"spoof suspected ({detail})"])
 
     # 2. Identity must exist in the authoritative record and be in good standing.
     if ctx.person is None:
         return Decision(DENY, ["identity not found in campus records"])
     if ctx.revoked:
         return Decision(DENY, ["credential revoked"])
-    if ctx.person.get("status") == "suspended":
-        return Decision(DENY, ["person is suspended (disciplinary record)"])
+    if not ctx.records_conflict:  # an unresolved status is handled in step 5, never guessed
+        status = ctx.person.get("status")
+        if status == "suspended":
+            return Decision(DENY, ["person is suspended (disciplinary record)"])
+        if status != "active":
+            return Decision(DENY, [f"person is not active (status {status})"])
 
     # 3. Evidence from different modules must agree on who this is.
     if ev.rfid_person_id and ev.face_person_id and ev.rfid_person_id != ev.face_person_id:
@@ -116,11 +137,27 @@ def decide(ev: Evidence, ctx: Context, t: dict = THRESHOLDS) -> Decision:
     if claimed and ev.face_person_id and ev.face_person_id != claimed:
         return Decision(DENY, ["face matched a different person than the identity record"])
 
-    # 4. Authorization: schedule or a valid temporary pass.
-    if not (ctx.schedule_ok or ctx.temp_pass_valid):
+    # 4. Authorization: schedule or a valid temporary pass; both when the schedule entry requires a pass.
+    if ctx.pass_required:
+        if not ctx.schedule_ok:
+            return Decision(DENY, ["no scheduled access to this room now"])
+        if not ctx.temp_pass_valid:
+            return Decision(DENY, ["exam in this room requires a valid temporary lab pass; none is valid now"])
+    elif not (ctx.schedule_ok or ctx.temp_pass_valid):
         return Decision(DENY, ["no scheduled access to this room now"])
+    if ctx.safety_training_required and not ctx.safety_training_valid:
+        return Decision(DENY, ["lab safety training missing or expired"])
 
-    # 5. Stale records: sensitive rooms deny, others ask for more proof.
+    # 5. Uncertain records: sensitive rooms deny, others ask for more proof.
+    if not ctx.revocation_fresh:
+        if ctx.room_sensitive:
+            return Decision(DENY, ["revocation list could not be refreshed; sensitive room stays closed"])
+        return Decision(REQUEST_VERIFICATION, ["revocation list could not be refreshed; extra check needed"])
+    if ctx.records_conflict:
+        if ctx.room_sensitive:
+            return Decision(DENY, ["conflicting authoritative records for a sensitive room", ctx.conflict_detail])
+        return Decision(REQUEST_VERIFICATION, ["conflicting records from equally authoritative sources; "
+                                               "manual verification required", ctx.conflict_detail])
     if not ctx.records_fresh:
         if ctx.room_sensitive:
             return Decision(DENY, ["authorization records are stale for a sensitive room"])

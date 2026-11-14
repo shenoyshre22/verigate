@@ -1,6 +1,8 @@
 """Builds the decision engine Context from campus records in DynamoDB. Read-only.
 
 Tables (env): IDENTITIES_TABLE (GSI "by-card"), AUTHORIZATION_TABLE, REVOCATIONS_TABLE.
+Revocation feed health: REVOCATIONS_TABLE item subject_id="SYNC#<card_issuer>" with last_refreshed_at,
+written by whatever job syncs that issuer's revocation list (default issuer "campus").
 Every ambiguity resolves towards denial: unknown or duplicated cards give no identity,
 a missing or old updated_at marks records as stale, and grants outside their window do not count.
 """
@@ -14,11 +16,16 @@ from typing import Any, Optional
 from boto3.dynamodb.conditions import Key
 
 from .engine import Context
+from .reconcile import Reconciled, reconcile_identity
 
 DEFAULT_FRESHNESS_MINUTES = 1440
 DEFAULT_SENSITIVE_ROOMS = "EXAMHALL,CHEMLAB"
 SCHEDULE_PREFIX = "ROOM#{room}#"
 PASS_PREFIX = "PASS#{room}#"
+TRAINING_PREFIX = "TRAINING#LAB_SAFETY#"
+DEFAULT_SAFETY_TRAINING_ROOMS = "CHEMLAB"
+DEFAULT_REVOCATION_FRESHNESS_MINUTES = 60
+DEFAULT_CARD_ISSUER = "campus"
 CLOCK_SKEW = timedelta(minutes=5)
 
 
@@ -42,12 +49,31 @@ def sensitive_rooms() -> frozenset[str]:
     return frozenset(normalize_room(r) for r in raw.split(",") if r.strip())
 
 
-def freshness_window() -> timedelta:
+def _minutes(env: str, default: int) -> timedelta:
     try:
-        minutes = int(os.environ.get("FRESHNESS_MINUTES", DEFAULT_FRESHNESS_MINUTES))
+        minutes = int(os.environ.get(env, default))
     except ValueError:
-        minutes = DEFAULT_FRESHNESS_MINUTES
+        minutes = default
     return timedelta(minutes=max(minutes, 0))
+
+
+def freshness_window() -> timedelta:
+    return _minutes("FRESHNESS_MINUTES", DEFAULT_FRESHNESS_MINUTES)
+
+
+def revocation_freshness_window() -> timedelta:
+    return _minutes("REVOCATION_FRESHNESS_MINUTES", DEFAULT_REVOCATION_FRESHNESS_MINUTES)
+
+
+def safety_training_rooms() -> frozenset[str]:
+    raw = os.environ.get("SAFETY_TRAINING_ROOMS", DEFAULT_SAFETY_TRAINING_ROOMS)
+    return frozenset(normalize_room(r) for r in raw.split(",") if r.strip())
+
+
+def within(ts: Any, now: datetime, window: timedelta) -> bool:
+    """True if ts is at most `window` old (and not suspiciously far in the future)."""
+    dt = parse_ts(ts)
+    return dt is not None and -CLOCK_SKEW <= now - dt <= window
 
 
 @dataclass
@@ -56,6 +82,8 @@ class LoadedContext:
     person_id: Optional[str] = None        # identity the decision is about
     card_person_id: Optional[str] = None   # owner of the presented card (feeds Evidence.rfid_person_id)
     grants: list = field(default_factory=list)
+    reconciliation: Optional[Reconciled] = None
+    card_issuer: Optional[str] = None
 
 
 class ContextLoader:
@@ -115,6 +143,11 @@ class ContextLoader:
                 active.append(g)
         return active
 
+    def revocation_feed_fresh(self, issuer: str, now: datetime) -> bool:
+        """Missing sync status counts as stale: we cannot prove the revocation list is current."""
+        status = self.revocation(f"SYNC#{issuer}")
+        return bool(status) and within(status.get("last_refreshed_at"), now, revocation_freshness_window())
+
     # --- full context -------------------------------------------------------
     def load(
         self,
@@ -141,11 +174,16 @@ class ContextLoader:
         else:
             person = card_identity
 
+        raw_person = person
+        person, reconciled = reconcile_identity(person)
         pid = person.get("person_id") if person else None
+        issuer = (person or {}).get("card_issuer") or DEFAULT_CARD_ISSUER
         revoked = any(self.revocation(s) is not None for s in (pid, rfid_card_id) if s)
 
         schedule = self.active_grants(pid, SCHEDULE_PREFIX.format(room=room), now) if pid else []
         passes = self.active_grants(pid, PASS_PREFIX.format(room=room), now) if pid else []
+        training_required = room in safety_training_rooms()
+        training = self.active_grants(pid, TRAINING_PREFIX, now) if pid and training_required else []
 
         ctx = Context(
             person=person,
@@ -153,10 +191,17 @@ class ContextLoader:
             schedule_ok=bool(schedule),
             temp_pass_valid=bool(passes),
             room_sensitive=room in sensitive_rooms(),
-            records_fresh=self._fresh(person, schedule + passes, now),
+            records_fresh=self._fresh(raw_person, schedule + passes, now),
             online=online,
+            revocation_fresh=self.revocation_feed_fresh(issuer, now),
+            pass_required=any(bool(g.get("requires_pass")) for g in schedule),
+            safety_training_required=training_required,
+            safety_training_valid=bool(training),
+            records_conflict=bool(reconciled and reconciled.conflict),
+            conflict_detail=reconciled.detail if reconciled and reconciled.conflict else "",
         )
-        return LoadedContext(context=ctx, person_id=pid, card_person_id=card_owner, grants=schedule + passes)
+        return LoadedContext(context=ctx, person_id=pid, card_person_id=card_owner, grants=schedule + passes,
+                             reconciliation=reconciled, card_issuer=issuer)
 
     @staticmethod
     def _fresh(person: Optional[dict], grants: list[dict], now: datetime) -> bool:
@@ -164,14 +209,6 @@ class ContextLoader:
         if person is None:
             return True  # nothing to be stale; the engine denies unknown identities anyway
         window = freshness_window()
-
-        def ok(ts: Any) -> bool:
-            dt = parse_ts(ts)
-            if dt is None:
-                return False
-            age = now - dt
-            return -CLOCK_SKEW <= age <= window  # far-future timestamps are as suspect as old ones
-
-        if not ok(person.get("updated_at")):
+        if not within(person.get("updated_at"), now, window):
             return False
-        return all(ok(g["updated_at"]) for g in grants if g.get("updated_at"))
+        return all(within(g["updated_at"], now, window) for g in grants if g.get("updated_at"))

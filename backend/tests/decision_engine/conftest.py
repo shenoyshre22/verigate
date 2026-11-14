@@ -49,6 +49,7 @@ def tables():
     ]:
         t["authorization"].put_item(Item=grant)
     t["revocations"].put_item(Item={"subject_id": "CARD-X9", "revoked_at": iso(NOW - timedelta(hours=2))})
+    t["revocations"].put_item(Item={"subject_id": "SYNC#campus", "last_refreshed_at": iso(NOW - timedelta(minutes=5))})
     return t
 
 
