@@ -1,0 +1,21 @@
+flowchart TD
+    U["Student / Employee"] --> T["Access Terminal"]
+    T --> F["Face Authentication"]
+    F --> FL["Face Liveness Detection"]
+    F --> FI["Face Identity Recognition"]
+    FL --> API["FastAPI Backend"]
+    FI --> API
+
+    API -.-> R["Amazon Rekognition<br/>Future integration"]
+    API -.-> D["DynamoDB<br/>Future integration"]
+    API -.-> L["AWS Lambda<br/>Future deployment"]
+    API -.-> I["AWS IAM<br/>Future policies"]
+
+    T -.-> C["Randomized Face Challenge<br/>Planned"]
+    T -.-> FP["Fingerprint<br/>Planned"]
+    T -.-> RFID["RFID<br/>Planned"]
+
+    API --> Z["Zero Trust Decision Engine<br/>Planned"]
+    Z --> A["ALLOW"]
+    Z --> V["REQUEST VERIFICATION"]
+    Z --> N["DENY"]
