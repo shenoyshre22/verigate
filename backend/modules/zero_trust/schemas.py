@@ -22,6 +22,7 @@ from pydantic import (
 from .enums import (
     AccessDecision,
     AccessReasonCode,
+    CampusRole,
     EvidenceOutcome,
     PermissionEffect,
     RecordStatus,
@@ -59,6 +60,8 @@ class AccessAction(DomainModel):
     """Action identifier; policy determines whether that action is permitted."""
 
     action_id: Identifier
+    exam_id: Identifier | None = None
+    purpose_id: Identifier | None = None
 
 
 class AccessRequest(DomainModel):
@@ -158,6 +161,12 @@ class IdentityStatusRecord(CampusRecord):
     """Trusted campus identity lifecycle status for a subject."""
 
 
+class CampusRoleRecord(CampusRecord):
+    """Trusted role assignment; a role alone does not confer resource permission."""
+
+    roles: tuple[CampusRole, ...] = Field(min_length=1)
+
+
 class ResourcePermissionRecord(CampusRecord):
     """Permission effect scoped to explicit resources and actions."""
 
@@ -205,6 +214,7 @@ class TemporaryLabPassRecord(CampusRecord):
 
     resource_id: Identifier
     action_ids: tuple[Identifier, ...] = Field(min_length=1)
+    purpose_id: Identifier | None = None
     valid_until: AwareDatetime
 
 

@@ -3,6 +3,7 @@
 from .enums import (
     AccessDecision,
     AccessReasonCode,
+    CampusRole,
     DecisionReasonCode,
     EvidenceOutcome,
     PermissionEffect,
@@ -16,6 +17,7 @@ from .schemas import (
     AccessDecisionResponse,
     AccessRequest,
     AuditEvent,
+    CampusRoleRecord,
     DecisionResponse,
     DisciplinarySuspensionRecord,
     ExaminationEligibilityRecord,
@@ -32,6 +34,14 @@ from .schemas import (
     VerificationEvidence,
     ZeroTrustAuditEvent,
 )
+from .authorization import (
+    AuthorizationEvaluationResult,
+    AuthorizationPolicy,
+    AuthorizationSnapshot,
+    CampusAuthorizationEvaluator,
+    RoleRequirement,
+)
+from .policy_evaluator import PolicyEvaluator
 from .evidence_validator import (
     EvidenceFreshnessPolicy,
     EvidenceIssue,
@@ -51,6 +61,12 @@ __all__ = [
     "AccessReasonCode",
     "AccessRequest",
     "AuditEvent",
+    "AuthorizationEvaluationResult",
+    "AuthorizationPolicy",
+    "AuthorizationSnapshot",
+    "CampusAuthorizationEvaluator",
+    "CampusRole",
+    "CampusRoleRecord",
     "DecisionReasonCode",
     "DecisionResponse",
     "DisciplinarySuspensionRecord",
@@ -68,6 +84,7 @@ __all__ = [
     "IdentityStatusRecord",
     "LabSafetyClearanceRecord",
     "PermissionEffect",
+    "PolicyEvaluator",
     "RecordProvenanceSummary",
     "RecordStatus",
     "RequestedResource",
@@ -75,6 +92,7 @@ __all__ = [
     "ResourceSensitivity",
     "RevocationState",
     "RevocationStatusRecord",
+    "RoleRequirement",
     "TemporaryLabPassRecord",
     "TrustedEvidence",
     "TrustedIssuerAdapter",
