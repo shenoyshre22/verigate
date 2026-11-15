@@ -144,11 +144,17 @@ flowchart TD
 
 **Hardware**
 - Mantra MFS100 Fingerprint Scanner
-- RFID Reader
+- RFID Reader and card
+- Arduino UNO
+- female to female jumper wires
+- buzzer
+- SG90 servo motor
+- leds (green and red)
+- 220 ohm resistors x 2
 - Camera / Webcam
 
 **Frontend**
-- Web-based authentication and access-control interface.
+- Web-based authentication and access-control interface using React and Vite
 
 ## Key Objectives
 
@@ -211,14 +217,6 @@ verigate/
 ├── .gitignore
 └── README.md
 ```
-
-### Current implementation status
-
-Phase 2A establishes the backend repository structure and a minimal FastAPI
-health endpoint. Face authentication is the only module in scope for the next
-implementation phase; its liveness and identity stages are not implemented
-yet. Randomized challenges, fingerprint, RFID, and the Zero Trust Decision
-Engine remain planned boundaries only.
 
 ## Team VERIGATE
 
